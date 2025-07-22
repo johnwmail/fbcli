@@ -1,0 +1,100 @@
+name: Release fbcli
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build fbcli
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.21'
+
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -v -o fbcli-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mv fbcli-${{ matrix.goos }}-${{ matrix.goarch }} fbcli.exe
+            zip fbcli-${{ matrix.goos }}-${{ matrix.goarch }}.zip fbcli.exe
+          else
+            tar -czvf fbcli-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz fbcli-${{ matrix.goos }}-${{ matrix.goarch }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: fbcli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: fbcli-${{ matrix.goos }}-${{ matrix.goarch }}.*
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/fbcli-linux-amd64/fbcli-linux-amd64.tar.gz
+          asset_name: fbcli-linux-amd64.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/fbcli-linux-arm64/fbcli-linux-arm64.tar.gz
+          asset_name: fbcli-linux-arm64.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/fbcli-windows-amd64/fbcli-windows-amd64.zip
+          asset_name: fbcli-windows-amd64.zip
+          asset_content_type: application/zip
