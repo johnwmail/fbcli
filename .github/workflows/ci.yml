@@ -20,8 +20,8 @@ jobs:
       filebrowser:
         image: filebrowser/filebrowser
         ports:
-          - 8080:8080
-        options: --user=root --database=/database.db --root=/srv
+          - 8080:80
+        #options: --user=root
         
     steps:
       - name: Check out code
@@ -42,9 +42,9 @@ jobs:
           echo "Filebrowser is up!"
 
       - name: Create filebrowser test user
+        id: fblog # Assign an ID to the step
         run: |
-          docker exec ${{ job.services.filebrowser.id }} /filebrowser users add testuser testpass --perm.admin
-          echo "Test user created."
+          docker logs ${{ job.services.filebrowser.id }} 2>&1 | awk '/password:/{print "fbpass="$NF}' >> $GITHUB_OUTPUT
 
       - name: Build fbcli
         run: go build -v -o fbcli
@@ -52,11 +52,15 @@ jobs:
       - name: Run tests
         env:
           FILEBROWSER_URL: http://localhost:8080
-          FILEBROWSER_USERNAME: testuser
-          FILEBROWSER_PASSWORD: testpass
+          FILEBROWSER_USERNAME: admin
+          FILEBROWSER_PASSWORD: ${{ steps.fblog.outputs.fbpass }}
         run: |
           set -e  # Exit immediately if a command fails
           
+          echo "FILEBROWSER_URL: $FILEBROWSER_URL"
+          echo "FILEBROWSER_USERNAME: $FILEBROWSER_USERNAME"
+          echo "FILEBROWSER_PASSWORD: $FILEBROWSER_PASSWORD"
+
           echo "--- Creating test assets ---"
           echo "hello world" > testfile.txt
           mkdir -p 'local test dir'
