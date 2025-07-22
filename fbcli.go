@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -105,7 +106,7 @@ func usage() {
 Commands:
   ls <remote_path>                List file/directory names
   list <remote_path>              List detailed info (like ls -la)
-  upload <local_path> <remote_dir>    Upload a file
+  upload <local_path> <remote_dir>    Upload a file or directory
   download <remote_path> [local_path] Download a file or directory (optional local_path)
   mkdir <remote_path>                 Create a directory
   rm <remote_path>                    Delete a file or directory
@@ -485,10 +486,70 @@ func (c *Client) Rename(oldPath, newPath string) {
 }
 
 func (c *Client) Upload(localPath, remoteDir string) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error accessing local path:", err)
+		return
+	}
+
+	if !info.IsDir() {
+		err := c.uploadFile(localPath, remoteDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Upload failed: %v\n", err)
+		} else {
+			fmt.Println("Upload complete.")
+		}
+		return
+	}
+
+	fmt.Printf("Uploading directory '%s' to '%s'\n", localPath, remoteDir)
+
+	localDirName := filepath.Base(localPath)
+	fullRemoteDir := path.Join(remoteDir, localDirName)
+
+	c.Mkdir(fullRemoteDir)
+
+	err = filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(localPath, currentLocalPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		remoteItemPath := path.Join(fullRemoteDir, relPath)
+
+		if info.IsDir() {
+			if currentLocalPath != localPath {
+				fmt.Printf("Creating remote directory: %s\n", remoteItemPath)
+				c.Mkdir(remoteItemPath)
+			}
+		} else {
+			remoteParentDir := path.Dir(remoteItemPath)
+			fmt.Printf("Uploading file %s to %s\n", currentLocalPath, remoteParentDir)
+			err := c.uploadFile(currentLocalPath, remoteParentDir)
+			if err != nil {
+				return fmt.Errorf("failed to upload %s: %w", currentLocalPath, err)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error during directory upload: %v\n", err)
+		return
+	}
+
+	fmt.Println("Directory upload complete.")
+}
+
+func (c *Client) uploadFile(localPath, remoteDir string) error {
 	file, err := os.Open(localPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		return err
 	}
 	defer file.Close()
 	filename := filepath.Base(localPath)
@@ -498,8 +559,7 @@ func (c *Client) Upload(localPath, remoteDir string) {
 	headers := map[string]string{"Content-Type": "application/octet-stream"}
 	resp, err := c.apiRequest("POST", url, file, headers)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
@@ -508,17 +568,15 @@ func (c *Client) Upload(localPath, remoteDir string) {
 		file.Seek(0, io.SeekStart)
 		resp, err = c.apiRequest("POST", url, file, headers)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return
+			return err
 		}
 		defer resp.Body.Close()
 	}
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Upload failed: %s\n", string(b))
-		return
+		return fmt.Errorf("server response %d: %s", resp.StatusCode, string(b))
 	}
-	fmt.Println("Upload complete.")
+	return nil
 }
 
 func (c *Client) isRemotePathDir(remotePath string) (bool, error) {
