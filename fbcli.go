@@ -63,8 +63,6 @@ func main() {
 
 	// Commands that take a single path argument
 	singlePathCommands := map[string]func(string){
-		"ls":     client.Ls,
-		"list":   client.List,
 		"mkdir":  client.Mkdir,
 		"rm":     client.Delete,
 		"delete": client.Delete,
@@ -72,17 +70,36 @@ func main() {
 
 	// Commands that take two path arguments
 	twoPathCommands := map[string]func(string, string){
-		"upload": client.Upload,
 		"rename": client.Rename,
 		"mv":     client.Rename,
 	}
 
-	if fn, ok := singlePathCommands[cmd]; ok {
+	if cmd == "ls" || cmd == "list" {
+		remotePath := "/"
+		if len(args) > 0 {
+			remotePath = strings.Join(args, " ")
+		}
+		if cmd == "ls" {
+			client.Ls(remotePath)
+		} else {
+			client.List(remotePath)
+		}
+	} else if fn, ok := singlePathCommands[cmd]; ok {
 		if len(args) < 1 {
 			usage()
 			os.Exit(1)
 		}
 		fn(strings.Join(args, " "))
+	} else if cmd == "upload" {
+		if len(args) < 1 || len(args) > 2 {
+			usage()
+			os.Exit(1)
+		}
+		remotePath := "/"
+		if len(args) == 2 {
+			remotePath = args[1]
+		}
+		client.Upload(args[0], remotePath)
 	} else if fn, ok := twoPathCommands[cmd]; ok {
 		if len(args) != 2 {
 			usage()
@@ -113,9 +130,9 @@ func usage() {
 	fmt.Printf("goclient version %s\n", version)
 	fmt.Println(`Usage: goclient <command> [arguments...]
 Commands:
-  ls <remote_path>                List file/directory names
-  list <remote_path>              List detailed info (like ls -la)
-  upload <local_path> <remote_dir>    Upload a file or directory
+  ls [remote_path]                List file/directory names (optional remote_path)
+  list [remote_path]              List detailed info (like ls -la) (optional remote_path)
+  upload <local_path> [remote_dir]    Upload a file or directory (optional remote_dir)
   download <remote_path> [local_path] Download a file or directory (optional local_path)
   mkdir <remote_path>                 Create a directory
   rm <remote_path>                    Delete a file or directory
