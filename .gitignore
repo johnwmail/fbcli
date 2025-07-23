@@ -26,3 +26,6 @@ fbcli
 test/
 upload/
 download/
+*.png
+*.jpg
+*.jpeg

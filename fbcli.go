@@ -16,6 +16,8 @@ import (
 	"golang.org/x/term"
 )
 
+var version = "dev" // this will be set by the build process
+
 const (
 	defaultURL      = "https://fbcli.app"
 	defaultUsername = "fbcliuser"
@@ -45,13 +47,19 @@ func main() {
 		Password: getenv("FILEBROWSER_PASSWORD", defaultPassword),
 	}
 	client := &Client{Config: cfg}
+
+	cmd := os.Args[1]
+	args := os.Args[2:]
+
+	if cmd == "show" {
+		client.ShowConfig()
+		os.Exit(0)
+	}
+
 	if err := client.Login(); err != nil {
 		fmt.Fprintf(os.Stderr, "Login failed: %v\n", err)
 		os.Exit(1)
 	}
-
-	cmd := os.Args[1]
-	args := os.Args[2:]
 
 	// Commands that take a single path argument
 	singlePathCommands := map[string]func(string){
@@ -102,6 +110,7 @@ func main() {
 }
 
 func usage() {
+	fmt.Printf("goclient version %s\n", version)
 	fmt.Println(`Usage: goclient <command> [arguments...]
 Commands:
   ls <remote_path>                List file/directory names
@@ -111,7 +120,29 @@ Commands:
   mkdir <remote_path>                 Create a directory
   rm <remote_path>                    Delete a file or directory
   rename <old_path> <new_path>        Rename a file or directory
+  show                              Show the current configuration
 `)
+}
+
+func (c *Client) ShowConfig() {
+	fmt.Printf("Version: %s\n", version)
+	fmt.Printf("URL: %s\n", c.Config.URL)
+	fmt.Printf("Username: %s\n", c.Config.Username)
+	fmt.Printf("Password: %s\n", redactPassword(c.Config.Password))
+}
+
+func redactPassword(s string) string {
+	length := len(s)
+	if length == 0 {
+		return ""
+	}
+	if length == 1 {
+		return "*"
+	}
+	if length == 2 {
+		return "**"
+	}
+	return string(s[0]) + strings.Repeat("*", length-2) + string(s[length-1])
 }
 
 func getenv(key, def string) string {
@@ -139,7 +170,7 @@ func (c *Client) Login() error {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+		return fmt.Errorf("HTTP %d: %s\n", resp.StatusCode, string(b))
 	}
 	// The response body is the JWT token (as in filebrowser_client.sh)
 	b, _ := io.ReadAll(resp.Body)
@@ -153,7 +184,6 @@ func (c *Client) apiRequest(method, path string, body io.Reader, headers map[str
 	if err != nil {
 		return nil, err
 	}
-	// Use browser-like User-Agent for all requests
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "*/*")
 	if c.Token != "" {
@@ -588,59 +618,57 @@ func (c *Client) isRemotePathDir(remotePath string) (bool, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
+		// The filebrowser API returns 404 for not found
+		if resp.StatusCode == http.StatusNotFound {
+			return false, fmt.Errorf("remote path '%s' not found (404)", remotePath)
+		}
 		b, _ := io.ReadAll(resp.Body)
 		return false, fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
 	}
 
-	var data struct {
-		IsDir bool
-	}
-	// Try to decode as a single item (for a specific file/directory)
-	if err := json.NewDecoder(resp.Body).Decode(&data); err == nil {
-		return data.IsDir, nil
+	// Read body into a buffer so we can try decoding it multiple times
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// If it's a directory listing, it will be an array of items.
-	// We need to re-read the body if the first decode failed.
-	// To do this, we'd need to read the body into a buffer first.
-	// For simplicity, let's assume if the first decode fails, it's not a single resource info.
-	// A more robust solution would involve reading the body into a bytes.Buffer and then
-	// trying to decode it as either a single struct or an array of structs.
-	// For now, we'll rely on the single struct decode for direct path checks.
-	// If the path is a directory, the API returns a single JSON object for that directory.
-	// If the path is a file, the API returns a single JSON object for that file.
-	// If the path is a directory and we are listing its contents, it returns an array.
-	// The current `Ls` and `List` functions handle the array case.
-	// For `isRemotePathDir`, we are checking the *path itself*, not its contents.
-	// So, a GET to /api/resources/path should return a single object for 'path'.
-	// If it's a directory, IsDir will be true. If it's a file, IsDir will be false.
-	// If it's an array, it means we asked for contents, not info about the path itself.
-	// This implies the path is a directory.
+	// First, try to decode as a single resource object
+	var singleResource struct {
+		IsDir bool `json:"isDir"`
+	}
+	if err := json.Unmarshal(bodyBytes, &singleResource); err == nil {
+		return singleResource.IsDir, nil
+	}
 
-	// Reset body for re-reading if needed (not strictly necessary with current API behavior assumption)
-	// resp.Body.Close()
-	// resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	// If that fails, try to decode as a directory listing (an object with an "items" array)
+	var dirListing struct {
+		Items []interface{} `json:"items"`
+	}
+	if err := json.Unmarshal(bodyBytes, &dirListing); err == nil {
+		// If it has an "items" key, we can safely assume it's a directory.
+		return true, nil
+	}
 
-	// Fallback for directory listing (if /api/resources/dir returns an array)
-	// This part is less precise for a single 'IsDir' check, but handles the case
-	// where the API might return an array even for a direct directory query.
-	// However, the Filebrowser API for /api/resources/<path> usually returns a single object
-	// for the <path> itself, not its contents, unless it's a listing of a parent.
-	// So, the first `json.NewDecoder(resp.Body).Decode(&data)` should be sufficient.
-	// If it fails, it's likely not a single resource info, or an error.
-	return false, fmt.Errorf("could not determine if %s is a directory", remotePath)
+	return false, fmt.Errorf("could not determine if '%s' is a directory: unexpected JSON structure", remotePath)
 }
 
 func (c *Client) Download(remotePath, localPath string) {
-	isDir, err := c.isRemotePathDir(remotePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error checking remote path type: %v\n", err)
+	// Check if the provided localPath exists and is a directory
+	info, err := os.Stat(localPath)
+	if err == nil && info.IsDir() {
+		// It's a directory. Construct the new path to save the file inside it.
+		baseName := filepath.Base(remotePath)
+		localPath = filepath.Join(localPath, baseName)
+	} else if err != nil && !os.IsNotExist(err) {
+		// It's some other error with the local path (e.g., permission denied)
+		fmt.Fprintf(os.Stderr, "Error accessing local path %s: %v\n", localPath, err)
 		return
 	}
 
-	// If localPath was not provided, derive it from remotePath
-	if localPath == "" {
-		localPath = filepath.Base(remotePath)
+	isDir, err := c.isRemotePathDir(remotePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
 	}
 
 	// If downloading a directory, ensure .zip suffix
