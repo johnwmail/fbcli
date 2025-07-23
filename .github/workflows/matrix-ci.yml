@@ -74,7 +74,7 @@ jobs:
           FILEBROWSER_URL: http://localhost:8080
           FILEBROWSER_USERNAME: admin
           FILEBROWSER_PASSWORD: ${{ steps.fblog.outputs.fbpass }}
-        run: script/integration-test.sh
+        run: bash script/integration-test.bash
 
   # Job for smoke testing on other platforms
   test-smoke:
