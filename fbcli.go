@@ -19,12 +19,6 @@ import (
 
 var version = "dev" // this will be set by the build process
 
-const (
-	defaultURL      = "https://fbcli.app"
-	defaultUsername = "fbcliuser"
-	defaultPassword = "fbcliPass123"
-)
-
 type Config struct {
 	URL      string
 	Username string
@@ -66,7 +60,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Login failed: %v\n", err)
 		os.Exit(1)
 	}
-
 
 	// Commands that take a single path argument
 	singlePathCommands := map[string]func(string){
@@ -250,8 +243,6 @@ func redactPassword(s string) string {
 	return string(s[0]) + strings.Repeat("*", length-2) + string(s[length-1])
 }
 
-
-
 func (c *Client) Login() error {
 	loginURL := c.Config.URL + "/api/login"
 	body := fmt.Sprintf(`{"username":"%s","password":"%s"}`,
@@ -270,7 +261,7 @@ func (c *Client) Login() error {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s\n", resp.StatusCode, string(b))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
 	}
 	// The response body is the JWT token (as in filebrowser_client.sh)
 	b, _ := io.ReadAll(resp.Body)
@@ -305,7 +296,7 @@ func (c *Client) Ls(remotePath string) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp.StatusCode, string(b))
+		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
 		return
 	}
 	var data struct {
@@ -437,14 +428,6 @@ func getTerminalWidth() (int, bool) {
 		}
 	}
 	return 80, false
-	if colStr := os.Getenv("COLUMNS"); colStr != "" {
-		var cols int
-		_, err := fmt.Sscanf(colStr, "%d", &cols)
-		if err == nil && cols > 0 {
-			return cols, true
-		}
-	}
-	return 80, false
 }
 
 func (c *Client) List(remotePath string) {
@@ -456,7 +439,7 @@ func (c *Client) List(remotePath string) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "API error %d: %s\n", resp.StatusCode, string(b))
+		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
 		return
 	}
 	var data struct {
