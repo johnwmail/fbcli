@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,14 +43,19 @@ func main() {
 	}
 
 	cfg := Config{
-		URL:      getenv("FILEBROWSER_URL", defaultURL),
-		Username: getenv("FILEBROWSER_USERNAME", defaultUsername),
-		Password: getenv("FILEBROWSER_PASSWORD", defaultPassword),
+		URL:      os.Getenv("FILEBROWSER_URL"),
+		Username: os.Getenv("FILEBROWSER_USERNAME"),
+		Password: os.Getenv("FILEBROWSER_PASSWORD"),
 	}
 	client := &Client{Config: cfg}
 
 	cmd := os.Args[1]
 	args := os.Args[2:]
+
+	if err := client.getCredentials(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting credentials: %v\n", err)
+		os.Exit(1)
+	}
 
 	if cmd == "show" {
 		client.ShowConfig()
@@ -60,6 +66,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Login failed: %v\n", err)
 		os.Exit(1)
 	}
+
 
 	// Commands that take a single path argument
 	singlePathCommands := map[string]func(string){
@@ -126,6 +133,87 @@ func main() {
 	}
 }
 
+func (c *Client) getCredentials() error {
+	reader := bufio.NewReader(os.Stdin)
+
+	if c.Config.URL == "" {
+		fmt.Print("Enter File Browser URL: ")
+		url, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		c.Config.URL = strings.TrimSpace(url)
+	}
+
+	if c.Config.Username == "" {
+		fmt.Print("Enter Username: ")
+		username, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		c.Config.Username = strings.TrimSpace(username)
+	}
+
+	if c.Config.Password == "" {
+		fmt.Print("Enter Password: ")
+		// Get the file descriptor for stdin
+		fd := int(os.Stdin.Fd())
+
+		// Check if stdin is a terminal
+		if !term.IsTerminal(fd) {
+			// If not a terminal, just read the line as is (e.g., from a pipe)
+			password, err := reader.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			c.Config.Password = strings.TrimSpace(password)
+			return nil
+		}
+
+		// It's a terminal, so handle masked input
+		oldState, err := term.MakeRaw(fd)
+		if err != nil {
+			return err
+		}
+		defer term.Restore(fd, oldState)
+
+		var password []byte
+		var backspace = []byte{'\b', ' ', '\b'} // sequence to erase a character
+
+		for {
+			var buf [1]byte
+			n, err := os.Stdin.Read(buf[:])
+			if err != nil || n == 0 {
+				return err
+			}
+
+			char := buf[0]
+
+			// Enter key
+			if char == '\r' || char == '\n' {
+				fmt.Print("\r\n")
+				break
+			}
+
+			// Backspace/Delete key (ASCII backspace is 8, delete is 127)
+			if char == 8 || char == 127 {
+				if len(password) > 0 {
+					password = password[:len(password)-1]
+					os.Stdout.Write(backspace)
+				}
+			} else if char == 3 { // Ctrl+C
+				return fmt.Errorf("interrupted")
+			} else {
+				password = append(password, char)
+				fmt.Print("*")
+			}
+		}
+		c.Config.Password = string(password)
+	}
+
+	return nil
+}
+
 func usage() {
 	fmt.Printf("goclient version %s\n", version)
 	fmt.Println(`Usage: goclient <command> [arguments...]
@@ -162,12 +250,7 @@ func redactPassword(s string) string {
 	return string(s[0]) + strings.Repeat("*", length-2) + string(s[length-1])
 }
 
-func getenv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
+
 
 func (c *Client) Login() error {
 	loginURL := c.Config.URL + "/api/login"
