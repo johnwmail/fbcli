@@ -1,0 +1,145 @@
+name: Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.24'
+      - name: Check code formatting
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [[ -n "$UNFORMATTED" ]]; then
+            echo "The following files are not properly formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+      - name: Tidy
+        run: |
+          go mod tidy
+          if [[ -n $(git status -s) ]]; then
+            echo "go.mod or go.sum are not tidy:"
+            git status -s
+            exit 1
+          fi
+
+  test-linux:
+    name: Integration Test (Linux/${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+        go: [1.24.x]
+    services:
+      filebrowser:
+        image: filebrowser/filebrowser
+        ports:
+          - 8080:80
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Remove Go module cache dir
+        run: rm -rf ~/go/pkg/mod
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go }}-
+      - name: Download Go modules
+        run: go mod download
+      - name: Wait for filebrowser to be ready
+        run: |
+          echo "Waiting for filebrowser service to start..."
+          until curl -s -o /dev/null http://localhost:8080/health; do
+            echo -n .
+            sleep 1
+          done
+          echo "Filebrowser is up!"
+      - name: Capture filebrowser password
+        id: fblog
+        run: |
+          docker logs ${{ job.services.filebrowser.id }} 2>&1 | awk '/password:/{print "fbpass="$NF}' >> $GITHUB_OUTPUT
+      - name: Build fbcli
+        env:
+          CGO_ENABLED: 0
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          VERSION_VAR=""
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION_VAR="-X main.version=${{ github.ref_name }}"
+          else
+            VERSION_VAR="-X main.version=dev-$(echo ${{ github.sha }} | cut -c1-7)"
+          fi
+          go build -v -ldflags="$VERSION_VAR" -o fbcli
+      - name: Run Integration Tests
+        env:
+          FILEBROWSER_URL: http://localhost:8080
+          FILEBROWSER_USERNAME: admin
+          FILEBROWSER_PASSWORD: ${{ steps.fblog.outputs.fbpass }}
+        run: bash script/integration-test.bash
+
+  test-smoke:
+    name: Smoke Test (Windows/amd64)
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Remove Go module cache dir
+        shell: pwsh
+        run: |
+          $mod = "$HOME/go/pkg/mod"
+          if (Test-Path $mod) { Remove-Item -Recurse -Force $mod }
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.24'
+      - name: Download Go modules
+        run: go mod download
+      - name: Build and Smoke Test
+        env:
+          CGO_ENABLED: 0
+          FILEBROWSER_URL: http://localhost:8080
+          FILEBROWSER_USERNAME: admin
+          FILEBROWSER_PASSWORD: password
+        shell: pwsh
+        run: |
+          $VERSION_VAR = ""
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $VERSION_VAR = "-X main.version=$env:GITHUB_REF_NAME"
+          } else {
+            $sha = $env:GITHUB_SHA.Substring(0,7)
+            $VERSION_VAR = "-X main.version=dev-$sha"
+          }
+          go build -v -ldflags="$VERSION_VAR" -o fbcli.exe
+          ./fbcli.exe show

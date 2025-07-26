@@ -37,8 +37,8 @@ echo "--- Testing directory download ---"
 
 # Verify the downloaded directory's contents
 echo "--- Verifying directory download ---"
-ls | grep 'downloaded_dir.zip'
-unzip -l downloaded_dir.zip | grep 'nested.txt'
+ls | grep 'downloaded_dir'
+ls downloaded_dir | grep 'nested.txt'
 
 # Test renaming a remote directory
 echo "--- Testing rename ---"
@@ -61,5 +61,14 @@ if ./fbcli ls '/' | grep -E 'renamed dir|local test dir'; then
   echo "Error: A directory still exists after deletion."
   exit 1
 fi
+
+
+# Run ls/list ignore feature test
+echo "--- Running ls/list ignore feature test ---"
+bash script/test-ls-list-ignore.bash
+
+# Run syncto/syncfrom ignore feature test
+echo "--- Running syncto/syncfrom ignore feature test ---"
+bash script/test-syncto-syncfrom-ignore.bash
 
 echo "All tests passed!"

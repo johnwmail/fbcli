@@ -1,3 +1,5 @@
+// ListIgnore lists files/directories with detailed info, ignoring entries matching ignoreName
+
 package main
 
 import (
@@ -10,8 +12,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+
+	"crypto/sha256"
+	"encoding/hex"
 
 	// Removed syscall and unsafe imports
 	"golang.org/x/term"
@@ -74,15 +80,29 @@ func main() {
 		"mv":     client.Rename,
 	}
 
+	ignoreName := ""
+	zipFlag := false
+	newArgs := []string{}
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-i" && i+1 < len(args) {
+			ignoreName = args[i+1]
+			i++
+		} else if args[i] == "-z" {
+			zipFlag = true
+		} else {
+			newArgs = append(newArgs, args[i])
+		}
+	}
+
 	if cmd == "ls" || cmd == "list" {
 		remotePath := "/"
-		if len(args) > 0 {
-			remotePath = strings.Join(args, " ")
+		if len(newArgs) > 0 {
+			remotePath = strings.Join(newArgs, " ")
 		}
 		if cmd == "ls" {
-			client.Ls(remotePath)
+			client.LsIgnore(remotePath, ignoreName)
 		} else {
-			client.List(remotePath)
+			client.ListIgnore(remotePath, ignoreName)
 		}
 	} else if fn, ok := singlePathCommands[cmd]; ok {
 		if len(args) < 1 {
@@ -91,38 +111,340 @@ func main() {
 		}
 		fn(strings.Join(args, " "))
 	} else if cmd == "upload" {
-		if len(args) < 1 || len(args) > 2 {
+		if len(newArgs) < 1 || len(newArgs) > 2 {
 			usage()
 			os.Exit(1)
 		}
 		remotePath := "/"
-		if len(args) == 2 {
-			remotePath = args[1]
+		if len(newArgs) == 2 {
+			remotePath = newArgs[1]
 		}
-		client.Upload(args[0], remotePath)
+		client.UploadIgnore(newArgs[0], remotePath, ignoreName)
+	} else if cmd == "download" { // Special handling for download to allow optional localPath
+		if zipFlag && ignoreName != "" {
+			fmt.Fprintln(os.Stderr, "-z (zip) and -i (ignore) cannot be used together.")
+			usage()
+			os.Exit(1)
+		}
+		if len(newArgs) < 1 || len(newArgs) > 2 {
+			usage()
+			os.Exit(1)
+		}
+		remotePath := newArgs[0]
+		localPath := ""
+		if len(newArgs) == 2 {
+			localPath = newArgs[1]
+		} else {
+			// If localPath is not provided...
+			if zipFlag {
+				// for zip downloads, default to basename.zip
+				localPath = filepath.Base(remotePath) + ".zip"
+			} else {
+				// for regular downloads, use the base name of the remotePath
+				localPath = filepath.Base(remotePath)
+			}
+		}
+		if zipFlag {
+			// Determine zip file path logic
+			zipPath := localPath
+			remoteBase := filepath.Base(remotePath)
+			// Helper to check for zip/dir conflict and add suffix if needed
+			nextAvailableZip := func(base string, dir string) string {
+				name := base + ".zip"
+				candidate := filepath.Join(dir, name)
+				i := 1
+				for {
+					if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
+						// Conflict: a directory exists with this name, try next
+						name = base + fmt.Sprintf("-%d.zip", i)
+						candidate = filepath.Join(dir, name)
+						i++
+					} else {
+						break
+					}
+				}
+				return candidate
+			}
+			if zipPath == "" {
+				zipPath = remoteBase + ".zip"
+				if fi, err := os.Stat(zipPath); err == nil && fi.IsDir() {
+					// Conflict: zipPath is a directory, add suffix
+					zipPath = nextAvailableZip(remoteBase, ".")
+				}
+			} else if strings.HasSuffix(zipPath, string(os.PathSeparator)) || (func() bool { info, err := os.Stat(zipPath); return err == nil && info.IsDir() })() {
+				zipPath = nextAvailableZip(remoteBase, zipPath)
+			} else if !strings.HasSuffix(zipPath, ".zip") {
+				// If not ending with .zip and not a dir, treat as file name
+				zipPath = zipPath + ".zip"
+				if fi, err := os.Stat(zipPath); err == nil && fi.IsDir() {
+					// Conflict: zipPath is a directory, add suffix
+					dir := filepath.Dir(zipPath)
+					base := strings.TrimSuffix(filepath.Base(zipPath), ".zip")
+					zipPath = nextAvailableZip(base, dir)
+				}
+			}
+			client.Download(remotePath, zipPath)
+		} else {
+			client.DownloadIgnore(remotePath, localPath, ignoreName)
+		}
 	} else if fn, ok := twoPathCommands[cmd]; ok {
 		if len(args) != 2 {
 			usage()
 			os.Exit(1)
 		}
 		fn(args[0], args[1])
-	} else if cmd == "download" { // Special handling for download to allow optional localPath
-		if len(args) < 1 || len(args) > 2 {
+	} else if cmd == "syncto" {
+
+		if len(newArgs) != 2 {
 			usage()
 			os.Exit(1)
 		}
-		remotePath := args[0]
-		localPath := ""
-		if len(args) == 2 {
-			localPath = args[1]
-		} else {
-			// If localPath is not provided, use the base name of the remotePath
-			localPath = filepath.Base(remotePath)
+		client.SyncToIgnore(newArgs[0], newArgs[1], ignoreName)
+	} else if cmd == "syncfrom" {
+		if len(newArgs) != 2 {
+			usage()
+			os.Exit(1)
 		}
-		client.Download(remotePath, localPath)
+		client.SyncFromIgnore(newArgs[0], newArgs[1], ignoreName)
 	} else {
 		usage()
 		os.Exit(1)
+	}
+
+}
+
+// SyncToIgnore is like SyncTo but ignores files/dirs matching ignoreName
+func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
+	fmt.Printf("Syncing from local '%s' to remote '%s' (ignoring '%s')\n", localPath, remotePath, ignoreName)
+	info, err := os.Stat(localPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error accessing local path: %v\n", err)
+		return
+	}
+	if !info.IsDir() {
+		var ignoreRegex *regexp.Regexp
+		if ignoreName != "" {
+			var err error
+			ignoreRegex, err = regexp.Compile(ignoreName)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+				return
+			}
+		}
+		if ignoreRegex != nil && shouldIgnoreRegex(info.Name(), ignoreRegex) {
+			fmt.Printf("Ignoring file: %s\n", info.Name())
+			return
+		}
+		remoteFilePath := path.Join(remotePath, info.Name())
+		c.syncFileToRemote(localPath, remoteFilePath, info)
+		return
+	}
+	localPaths := make(map[string]os.FileInfo)
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		var err error
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(localPath, currentLocalPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		if relPath == "." {
+			fmt.Printf("[DEBUG] walk: relPath=%q (root), info.Name()=%q\n", relPath, info.Name())
+			localPaths[relPath] = info
+			return nil
+		}
+		if ignoreRegex != nil {
+			pathParts := strings.Split(relPath, "/")
+			for _, part := range pathParts {
+				if shouldIgnoreRegex(part, ignoreRegex) {
+					// If this is a directory, skip the whole subtree
+					if info.IsDir() {
+						fmt.Printf("[DEBUG] walk: relPath=%q, info.Name()=%q, SKIP DIR subtree (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+						return filepath.SkipDir
+					}
+					// If this is a file, skip the file
+					fmt.Printf("[DEBUG] walk: relPath=%q, info.Name()=%q, SKIP FILE (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+					return nil
+				}
+			}
+		}
+		fmt.Printf("[DEBUG] walk: relPath=%q, info.Name()=%q, KEEP\n", relPath, info.Name())
+		localPaths[relPath] = info
+		return nil
+	})
+	if walkErr != nil {
+		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
+		return
+	}
+	for relPath, info := range localPaths {
+		if relPath == "." {
+			continue
+		}
+		if ignoreRegex != nil {
+			pathParts := strings.Split(relPath, "/")
+			skip := false
+			for _, part := range pathParts {
+				if shouldIgnoreRegex(part, ignoreRegex) {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+		}
+		remoteItemPath := path.Join(remotePath, relPath)
+		if info.IsDir() {
+			c.Mkdir(remoteItemPath)
+		} else {
+			c.syncFileToRemote(filepath.Join(localPath, relPath), remoteItemPath, info)
+		}
+	}
+	var walkRemote func(string, string)
+	walkRemote = func(remoteDir, localDir string) {
+		remoteItems, err := c.listRemote(remoteDir)
+		if err != nil {
+			return
+		}
+		for _, item := range remoteItems {
+			if ignoreRegex != nil && shouldIgnoreRegex(item.Name, ignoreRegex) {
+				continue
+			}
+			rel := path.Join(strings.TrimPrefix(remoteDir, remotePath), item.Name)
+			rel = strings.TrimPrefix(rel, "/")
+			localItem, exists := localPaths[rel]
+			remoteItemPath := path.Join(remoteDir, item.Name)
+			if !exists {
+				if item.IsDir {
+					fmt.Printf("Deleting remote directory not in source: %s\n", remoteItemPath)
+					c.Delete(remoteItemPath)
+				} else {
+					fmt.Printf("Deleting remote file not in source: %s\n", remoteItemPath)
+					c.Delete(remoteItemPath)
+				}
+			} else if item.IsDir && localItem.IsDir() {
+				walkRemote(remoteItemPath, filepath.Join(localDir, item.Name))
+			}
+		}
+	}
+	walkRemote(remotePath, localPath)
+}
+
+// SyncFromIgnore is like SyncFrom but ignores files/dirs matching ignoreName
+func (c *Client) SyncFromIgnore(remotePath, localPath, ignoreName string) {
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		var err error
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+	isDir, err := c.isRemotePathDir(remotePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking remote path type: %v\n", err)
+		return
+	}
+	if !isDir {
+		if ignoreRegex != nil && shouldIgnoreRegex(path.Base(remotePath), ignoreRegex) {
+			fmt.Printf("Ignoring file: %s\n", path.Base(remotePath))
+			return
+		}
+		c.syncFileFromRemote(remotePath, localPath)
+		return
+	}
+	fmt.Printf("Syncing remote directory '%s' to local '%s' (ignoring '%s')\n", remotePath, localPath, ignoreName)
+	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localPath, err)
+		return
+	}
+	remoteItems := make(map[string]RemoteItem)
+	var collectRemote func(string, string, bool)
+	collectRemote = func(rPath, relBase string, isTopLevel bool) {
+		items, err := c.listRemote(rPath)
+		if err != nil {
+			return
+		}
+		for _, item := range items {
+			if isTopLevel && ignoreRegex != nil && shouldIgnoreRegex(item.Name, ignoreRegex) {
+				continue
+			}
+			rel := path.Join(relBase, item.Name)
+			remoteItems[rel] = item
+			if item.IsDir {
+				collectRemote(path.Join(rPath, item.Name), rel, false)
+			}
+		}
+	}
+	collectRemote(remotePath, "", true)
+	localItems := make(map[string]os.FileInfo)
+	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(localPath, currentLocalPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		// Only ignore at the top level
+		if relPath != "." && strings.Count(relPath, "/") == 0 && ignoreRegex != nil && shouldIgnoreRegex(info.Name(), ignoreRegex) {
+			return nil // skip
+		}
+		localItems[relPath] = info
+		return nil
+	})
+	if walkErr != nil {
+		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
+		return
+	}
+	for rel, item := range remoteItems {
+		exists := false
+		if _, ok := localItems[rel]; ok {
+			exists = true
+		}
+		newRemotePath := path.Join(remotePath, rel)
+		newLocalPath := filepath.Join(localPath, rel)
+		if item.IsDir {
+			if !exists {
+				if err := os.MkdirAll(newLocalPath, os.ModePerm); err == nil {
+					fmt.Printf("Directory created: %s\n", newLocalPath)
+				}
+			}
+			c.SyncFromIgnore(newRemotePath, newLocalPath, ignoreName)
+		} else {
+			c.syncFileFromRemote(newRemotePath, newLocalPath)
+		}
+	}
+	for rel, info := range localItems {
+		if rel == "." {
+			continue
+		}
+		if _, exists := remoteItems[rel]; !exists {
+			// Only ignore at the top level
+			if strings.Count(rel, "/") == 0 && ignoreRegex != nil && shouldIgnoreRegex(info.Name(), ignoreRegex) {
+				continue
+			}
+			localPathToDelete := filepath.Join(localPath, rel)
+			if info.IsDir() {
+				fmt.Printf("Deleting local directory not in remote: %s\n", localPathToDelete)
+				os.RemoveAll(localPathToDelete)
+			} else {
+				fmt.Printf("Deleting local file not in remote: %s\n", localPathToDelete)
+				os.Remove(localPathToDelete)
+			}
+		}
 	}
 }
 
@@ -168,10 +490,14 @@ func (c *Client) getCredentials() error {
 		if err != nil {
 			return err
 		}
-		defer term.Restore(fd, oldState)
+		defer func() {
+			if err := term.Restore(fd, oldState); err != nil {
+				fmt.Fprintf(os.Stderr, "Error restoring terminal: %v\n", err)
+			}
+		}()
 
 		var password []byte
-		var backspace = []byte{'\b', ' ', '\b'} // sequence to erase a character
+		var backspace = []byte{'', ' ', ''} // sequence to erase a character
 
 		for {
 			var buf [1]byte
@@ -209,7 +535,7 @@ func (c *Client) getCredentials() error {
 
 func usage() {
 	fmt.Printf("goclient version %s\n", version)
-	fmt.Println(`Usage: goclient <command> [arguments...]
+	fmt.Print(`Usage: goclient <command> [arguments...]
 Commands:
   ls [remote_path]                List file/directory names (optional remote_path)
   list [remote_path]              List detailed info (like ls -la) (optional remote_path)
@@ -219,6 +545,8 @@ Commands:
   rm <remote_path>                    Delete a file or directory
   rename <old_path> <new_path>        Rename a file or directory
   show                              Show the current configuration
+  syncto <local_path> <remote_path>   Sync files from a local path to a remote path
+  syncfrom <remote_path> <local_path> Sync files from a remote path to a local path
 `)
 }
 
@@ -552,10 +880,10 @@ func (c *Client) Mkdir(remotePath string) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 && resp.StatusCode != 409 { // 409 = already exists
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Directory creation failed. Server responded with HTTP %d.\n%s\n", resp.StatusCode, string(b))
+		fmt.Fprintf(os.Stderr, "Directory creation failed for '%s'. Server responded with HTTP %d.\n%s\n", remotePath, resp.StatusCode, string(b))
 		return
 	}
-	fmt.Println("Directory created.")
+	fmt.Printf("Directory created: %s\n", remotePath)
 }
 
 func (c *Client) Delete(remotePath string) {
@@ -622,7 +950,7 @@ func (c *Client) Upload(localPath, remoteDir string) {
 
 	c.Mkdir(fullRemoteDir)
 
-	err = filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -650,9 +978,8 @@ func (c *Client) Upload(localPath, remoteDir string) {
 		}
 		return nil
 	})
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error during directory upload: %v\n", err)
+	if walkErr != nil {
+		fmt.Fprintf(os.Stderr, "Error during directory upload: %v\n", walkErr)
 		return
 	}
 
@@ -678,7 +1005,9 @@ func (c *Client) uploadFile(localPath, remoteDir string) error {
 	if resp.StatusCode == 404 {
 		// Try to create directory, then retry upload
 		c.Mkdir(remoteDir)
-		file.Seek(0, io.SeekStart)
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("failed to seek file: %w", err)
+		}
 		resp, err = c.apiRequest("POST", url, file, headers)
 		if err != nil {
 			return err
@@ -689,6 +1018,419 @@ func (c *Client) uploadFile(localPath, remoteDir string) error {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("server response %d: %s", resp.StatusCode, string(b))
 	}
+	return nil
+}
+
+func (c *Client) SyncTo(localPath, remotePath string) {
+	fmt.Printf("Syncing from local '%s' to remote '%s'\n", localPath, remotePath)
+	info, err := os.Stat(localPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error accessing local path: %v\n", err)
+		return
+	}
+
+	if !info.IsDir() {
+		// It's a file
+		remoteFilePath := path.Join(remotePath, info.Name())
+		c.syncFileToRemote(localPath, remoteFilePath, info)
+		return
+	}
+
+	// It's a directory
+	// Collect all local relative paths
+	localPaths := make(map[string]os.FileInfo)
+	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(localPath, currentLocalPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+
+		localPaths[relPath] = info
+		return nil
+	})
+	if walkErr != nil {
+		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
+		return
+	}
+
+	// Sync local to remote (create/update)
+	for relPath, info := range localPaths {
+		remoteItemPath := path.Join(remotePath, relPath)
+		if info.IsDir() {
+			c.Mkdir(remoteItemPath)
+		} else {
+			c.syncFileToRemote(filepath.Join(localPath, relPath), remoteItemPath, info)
+		}
+	}
+
+	// Delete remote files/dirs not in local
+	var walkRemote func(string, string)
+	walkRemote = func(remoteDir, localDir string) {
+		remoteItems, err := c.listRemote(remoteDir)
+		if err != nil {
+			return
+		}
+		for _, item := range remoteItems {
+			rel := path.Join(strings.TrimPrefix(remoteDir, remotePath), item.Name)
+			rel = strings.TrimPrefix(rel, "/")
+			localItem, exists := localPaths[rel]
+			remoteItemPath := path.Join(remoteDir, item.Name)
+			if !exists {
+				// Not in local, delete from remote
+				if item.IsDir {
+					fmt.Printf("Deleting remote directory not in source: %s\n", remoteItemPath)
+					c.Delete(remoteItemPath)
+				} else {
+					fmt.Printf("Deleting remote file not in source: %s\n", remoteItemPath)
+					c.Delete(remoteItemPath)
+				}
+			} else if item.IsDir && localItem.IsDir() {
+				walkRemote(remoteItemPath, filepath.Join(localDir, item.Name))
+			}
+		}
+	}
+	walkRemote(remotePath, localPath)
+}
+
+func (c *Client) syncFileToRemote(localPath, remotePath string, localFileInfo os.FileInfo) {
+	remoteItems, err := c.listRemote(path.Dir(remotePath))
+	if err != nil {
+		// Assume directory doesn't exist, so upload
+		if err := c.uploadFile(localPath, path.Dir(remotePath)); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to upload file: %v\n", err)
+		}
+		return
+	}
+
+	var remoteItem *RemoteItem
+	for i, item := range remoteItems {
+		if item.Name == path.Base(remotePath) {
+			remoteItem = &remoteItems[i]
+			break
+		}
+	}
+
+	if remoteItem != nil {
+		// File exists on remote, compare
+		if localFileInfo.Size() != remoteItem.Size {
+			fmt.Printf("File size mismatch for %s. Uploading.\n", localPath)
+			if err := c.uploadFile(localPath, path.Dir(remotePath)); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to upload file: %v\n", err)
+			}
+			return
+		}
+
+		if localFileInfo.Size() < 1024*1024 { // 1MB
+			localHash, err := getLocalFileHash(localPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error hashing local file %s: %v\n", localPath, err)
+				return
+			}
+			localHashNorm := strings.ToLower(strings.TrimSpace(localHash))
+			remoteHash, err := c.getRemoteFileHash(remotePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error fetching remote hash for %s: %v\n", remotePath, err)
+				// fallback: assume not in sync
+				fmt.Printf("File hash mismatch for %s. Uploading.\n", localPath)
+				if err := c.uploadFile(localPath, path.Dir(remotePath)); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to upload file: %v\n", err)
+				}
+				return
+			}
+			remoteHashNorm := strings.ToLower(strings.TrimSpace(remoteHash))
+			if localHashNorm != remoteHashNorm {
+				fmt.Printf("File hash mismatch for %s. Uploading.\n", localPath)
+				if err := c.uploadFile(localPath, path.Dir(remotePath)); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to upload file: %v\n", err)
+				}
+			} else {
+				fmt.Printf("File %s is already in sync.\n", localPath)
+			}
+		} else {
+			fmt.Printf("File %s is already in sync (size match, not hashing >1MB).\n", localPath)
+		}
+	} else {
+		// File does not exist on remote, upload
+		if err := c.uploadFile(localPath, path.Dir(remotePath)); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to upload file: %v\n", err)
+		}
+	}
+}
+
+func (c *Client) SyncFrom(remotePath, localPath string) {
+	isDir, err := c.isRemotePathDir(remotePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking remote path type: %v\n", err)
+		return
+	}
+
+	if !isDir {
+		// It's a file
+		c.syncFileFromRemote(remotePath, localPath)
+		return
+	}
+
+	// It's a directory
+	fmt.Printf("Syncing remote directory '%s' to local '%s'\n", remotePath, localPath)
+	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localPath, err)
+		return
+	}
+
+	// Collect all remote items
+	remoteItems := make(map[string]RemoteItem)
+	var collectRemote func(string, string)
+	collectRemote = func(rPath, relBase string) {
+		items, err := c.listRemote(rPath)
+		if err != nil {
+			return
+		}
+		for _, item := range items {
+			rel := path.Join(relBase, item.Name)
+			remoteItems[rel] = item
+			if item.IsDir {
+				collectRemote(path.Join(rPath, item.Name), rel)
+			}
+		}
+	}
+	collectRemote(remotePath, "")
+
+	// Collect all local items
+	localItems := make(map[string]os.FileInfo)
+	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(localPath, currentLocalPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		localItems[relPath] = info
+		return nil
+	})
+	if walkErr != nil {
+		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
+		return
+	}
+
+	// Download or update files/dirs from remote
+	for rel, item := range remoteItems {
+		exists := false
+		if _, ok := localItems[rel]; ok {
+			exists = true
+		}
+		newRemotePath := path.Join(remotePath, rel)
+		newLocalPath := filepath.Join(localPath, rel)
+		if item.IsDir {
+			if !exists {
+				if err := os.MkdirAll(newLocalPath, os.ModePerm); err == nil {
+					fmt.Printf("Directory created: %s\n", newLocalPath)
+				}
+			}
+			c.SyncFrom(newRemotePath, newLocalPath)
+		} else {
+			c.syncFileFromRemote(newRemotePath, newLocalPath)
+		}
+	}
+
+	// Delete local files/dirs not in remote
+	for rel, info := range localItems {
+		if rel == "." {
+			continue
+		}
+		if _, exists := remoteItems[rel]; !exists {
+			localPathToDelete := filepath.Join(localPath, rel)
+			if info.IsDir() {
+				fmt.Printf("Deleting local directory not in remote: %s\n", localPathToDelete)
+				os.RemoveAll(localPathToDelete)
+			} else {
+				fmt.Printf("Deleting local file not in remote: %s\n", localPathToDelete)
+				os.Remove(localPathToDelete)
+			}
+		}
+	}
+}
+
+func (c *Client) syncFileFromRemote(remotePath, localPath string) {
+	remoteItems, err := c.listRemote(path.Dir(remotePath))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list remote directory %s: %v\n", path.Dir(remotePath), err)
+		return
+	}
+
+	var remoteItem *RemoteItem
+	for i, item := range remoteItems {
+		if item.Name == path.Base(remotePath) {
+			remoteItem = &remoteItems[i]
+			break
+		}
+	}
+
+	if remoteItem == nil {
+		fmt.Fprintf(os.Stderr, "Remote file %s not found.\n", remotePath)
+		return
+	}
+
+	localFileInfo, err := os.Stat(localPath)
+	if err == nil {
+		// File exists locally, compare
+		if localFileInfo.Size() != remoteItem.Size {
+			fmt.Printf("File size mismatch for %s. Downloading.\n", remotePath)
+			if err := c.downloadFile(remotePath, localPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to download file: %v\n", err)
+			}
+			return
+		}
+
+		if localFileInfo.Size() < 1024*1024 { // 1MB
+			localHash, err := getLocalFileHash(localPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error hashing local file %s: %v\n", localPath, err)
+				return
+			}
+			localHashNorm := strings.ToLower(strings.TrimSpace(localHash))
+			remoteHash, err := c.getRemoteFileHash(remotePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error fetching remote hash for %s: %v\n", remotePath, err)
+				// fallback: assume not in sync
+				fmt.Printf("File hash mismatch for %s. Downloading.\n", remotePath)
+				if err := c.downloadFile(remotePath, localPath); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to download file: %v\n", err)
+				}
+				return
+			}
+			remoteHashNorm := strings.ToLower(strings.TrimSpace(remoteHash))
+			if localHashNorm != remoteHashNorm {
+				fmt.Printf("File hash mismatch for %s. Downloading.\n", remotePath)
+				if err := c.downloadFile(remotePath, localPath); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to download file: %v\n", err)
+				}
+			} else {
+				fmt.Printf("File %s is already in sync.\n", localPath)
+			}
+		} else {
+			fmt.Printf("File %s is already in sync (size match, not hashing >1MB).\n", localPath)
+		}
+	} else {
+		// File does not exist locally, download
+		if err := c.downloadFile(remotePath, localPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to download file: %v\n", err)
+		}
+	}
+}
+
+// getRemoteFileHash fetches the SHA256 hash of a remote file using the File Browser API
+func (c *Client) getRemoteFileHash(remotePath string) (string, error) {
+	apiURL := "/api/resources" + encodePathPreserveSlash(remotePath) + "?checksum=sha256"
+	headers := map[string]string{
+		"Accept":          "*/*",
+		"Accept-Language": "en-US,en;q=0.9",
+	}
+	resp, err := c.apiRequest("GET", apiURL, nil, headers)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	rawBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(rawBody))
+	}
+	var data struct {
+		Checksums map[string]string `json:"checksums"`
+	}
+	err = json.Unmarshal(rawBody, &data)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode checksum response: %w", err)
+	}
+	hash := ""
+	if data.Checksums != nil {
+		hash = data.Checksums["sha256"]
+	}
+	return hash, nil
+}
+
+func getLocalFileHash(filePath string) (
+	string,
+	error,
+) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type RemoteItem struct {
+	Name     string `json:"name"`
+	IsDir    bool   `json:"isDir"`
+	Size     int64  `json:"size"`
+	Modified string `json:"modified"`
+}
+
+func (c *Client) listRemote(remotePath string) ([]RemoteItem, error) {
+	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
+	}
+	var data struct {
+		Items []RemoteItem `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		// It might be a single file response, which is not a list.
+		// The caller should have checked with isRemotePathDir.
+		// This indicates an issue if called on a file.
+		return nil, fmt.Errorf("failed to decode directory listing for '%s': %w", remotePath, err)
+	}
+	return data.Items, nil
+}
+
+func (c *Client) downloadFile(remotePath, localPath string) error {
+	fmt.Printf("Downloading file '%s' to '%s'\n", remotePath, localPath)
+	downloadURL := "/api/raw" + encodePathPreserveSlash(remotePath)
+
+	resp, err := c.apiRequest("GET", downloadURL, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("download failed: %s", string(b))
+	}
+
+	localDir := filepath.Dir(localPath)
+	if err := os.MkdirAll(localDir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create parent directory %s: %w", localDir, err)
+	}
+
+	out, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("error saving downloaded file: %w", err)
+	}
+	fmt.Println("Download complete.")
 	return nil
 }
 
@@ -816,4 +1558,377 @@ func encodeSegments(p string) string {
 		parts[i] = url.PathEscape(seg)
 	}
 	return "/" + strings.Join(parts, "/")
+}
+
+func (c *Client) LsIgnore(remotePath, ignoreName string) {
+	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
+		return
+	}
+	var data struct {
+		Items []struct {
+			Name     string
+			IsDir    bool
+			Modified string
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to decode response:", err)
+		return
+	}
+	// Deduplicate by normalized name, keep most recent Modified
+	type entry struct {
+		Name     string
+		IsDir    bool
+		Modified string
+	}
+	dedup := make(map[string]entry)
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		var err error
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+	for _, item := range data.Items {
+		norm := strings.TrimRight(item.Name, "\r\n")
+		if strings.TrimSpace(norm) == "" {
+			continue // skip blank/ghost entries after normalization
+		}
+		if ignoreRegex != nil && shouldIgnoreRegex(norm, ignoreRegex) {
+			continue
+		}
+		if e, ok := dedup[norm]; !ok || item.Modified > e.Modified {
+			dedup[norm] = entry{item.Name, item.IsDir, item.Modified}
+		}
+	}
+	// Sort by Modified descending, then by Name
+	sorted := make([]entry, 0, len(dedup))
+	for _, v := range dedup {
+		sorted = append(sorted, v)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Modified == sorted[j].Modified {
+			return sorted[i].Name < sorted[j].Name
+		}
+		return sorted[i].Modified > sorted[j].Modified
+	})
+	// Print like bash: tab-separated, trailing slash for dirs
+	const (
+		colorBlue  = "\033[1;34m"
+		colorReset = "\033[0m"
+	)
+	// Prepare names and calculate max width
+	names := make([]string, len(sorted))
+	maxLen := 0
+	for i, e := range sorted {
+		name := e.Name
+		name = strings.ReplaceAll(name, "\n", "")
+		name = strings.ReplaceAll(name, "\r", "")
+		if e.IsDir && !strings.HasSuffix(name, "/") {
+			name += "/"
+		}
+		if e.IsDir {
+			name = colorBlue + name + colorReset
+		}
+		names[i] = name
+		// Visible length (strip color codes for width)
+		visible := len([]rune(stripANSICodes(name)))
+		if visible > maxLen {
+			maxLen = visible
+		}
+	}
+	if maxLen < 16 {
+		maxLen = 16
+	}
+	// Get terminal width (default 80)
+	width := 80
+	if w, ok := getTerminalWidth(); ok {
+		width = w
+	}
+	colWidth := maxLen + 2
+	cols := width / colWidth
+	if cols < 1 {
+		cols = 1
+	}
+	rows := (len(names) + cols - 1) / cols
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			i := c*rows + r
+			if i >= len(names) {
+				continue
+			}
+			name := names[i]
+			fmt.Printf("%-*s", colWidth+len(name)-len(stripANSICodes(name)), name)
+		}
+		fmt.Println()
+	}
+}
+
+// ListIgnore lists files/directories with detailed info, ignoring entries matching ignoreName
+func (c *Client) ListIgnore(remotePath, ignoreName string) {
+	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
+		return
+	}
+	var data struct {
+		Items []struct {
+			Name     string
+			IsDir    bool
+			Size     int64
+			Modified string
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to decode response:", err)
+		return
+	}
+	type entry struct {
+		Name     string
+		IsDir    bool
+		Modified string
+		Size     int64
+	}
+	dedup := make(map[string]entry)
+	maxName := 4 // min width for 'Name'
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		var err error
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+	for _, item := range data.Items {
+		norm := strings.TrimRight(item.Name, "\r\n")
+		if strings.TrimSpace(norm) == "" {
+			continue // skip blank/ghost entries after normalization
+		}
+		if ignoreRegex != nil && shouldIgnoreRegex(norm, ignoreRegex) {
+			continue
+		}
+		if e, ok := dedup[norm]; !ok || item.Modified > e.Modified {
+			dedup[norm] = entry{item.Name, item.IsDir, item.Modified, item.Size}
+		}
+		if l := len(item.Name); l > maxName {
+			maxName = l
+		}
+	}
+	if maxName > 60 {
+		maxName = 60
+	} else if maxName < 30 {
+		maxName = 30
+	}
+	sorted := make([]entry, 0, len(dedup))
+	for _, v := range dedup {
+		sorted = append(sorted, v)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Modified == sorted[j].Modified {
+			return sorted[i].Name < sorted[j].Name
+		}
+		return sorted[i].Modified > sorted[j].Modified
+	})
+	fmt.Printf("%-*s %-19s %-8s\n", maxName, "Name", "Modified", "Size")
+	fmt.Printf("%-*s %-19s %-8s\n", maxName, strings.Repeat("-", maxName), strings.Repeat("-", 19), strings.Repeat("-", 8))
+	const (
+		colorBlue  = "\033[1;34m"
+		colorReset = "\033[0m"
+	)
+	for _, e := range sorted {
+		name := e.Name
+		name = strings.ReplaceAll(name, "\n", "")
+		name = strings.ReplaceAll(name, "\r", "")
+		if e.IsDir && !strings.HasSuffix(name, "/") {
+			name += "/"
+		}
+		date := e.Modified
+		if len(date) > 19 && strings.Contains(date, "T") {
+			date = strings.Replace(date[:19], "T", " ", 1)
+		} else if len(date) > 19 {
+			date = date[:19]
+		}
+		visibleLen := len([]rune(name))
+		if e.IsDir {
+			colorName := colorBlue + name + colorReset
+			fmt.Printf("%s%s %-19s %-8d\n", colorName, strings.Repeat(" ", maxName-visibleLen), date, e.Size)
+		} else {
+			fmt.Printf("%-*s %-19s %-8d\n", maxName, name, date, e.Size)
+		}
+	}
+}
+
+// UploadIgnore is like Upload but skips files/dirs matching ignoreName (regex)
+func (c *Client) UploadIgnore(localPath, remoteDir, ignoreName string) {
+	info, err := os.Stat(localPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error accessing local path:", err)
+		return
+	}
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+	if !info.IsDir() {
+		if ignoreRegex != nil && shouldIgnoreRegex(info.Name(), ignoreRegex) {
+			fmt.Printf("Ignoring file: %s\n", info.Name())
+			return
+		}
+		err := c.uploadFile(localPath, remoteDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Upload failed: %v\n", err)
+		} else {
+			fmt.Println("Upload complete.")
+		}
+		return
+	}
+	fmt.Printf("Uploading directory '%s' to '%s' (ignoring '%s')\n", localPath, remoteDir, ignoreName)
+	localDirName := filepath.Base(localPath)
+	if ignoreRegex != nil && shouldIgnoreRegex(localDirName, ignoreRegex) {
+		fmt.Printf("Ignoring directory: %s\n", localDirName)
+		return
+	}
+	fullRemoteDir := path.Join(remoteDir, localDirName)
+	c.Mkdir(fullRemoteDir)
+	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(localPath, currentLocalPath)
+		if err != nil {
+			return err
+		}
+		relPath = filepath.ToSlash(relPath)
+		if relPath == "." {
+			return nil
+		}
+		if ignoreRegex != nil {
+			pathParts := strings.Split(relPath, "/")
+			for _, part := range pathParts {
+				if shouldIgnoreRegex(part, ignoreRegex) {
+					if info.IsDir() {
+						fmt.Printf("[DEBUG] upload: relPath=%q, info.Name()=%q, SKIP DIR subtree (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+						return filepath.SkipDir
+					}
+					fmt.Printf("[DEBUG] upload: relPath=%q, info.Name()=%q, SKIP FILE (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+					return nil
+				}
+			}
+		}
+		remoteItemPath := path.Join(fullRemoteDir, relPath)
+		if info.IsDir() {
+			fmt.Printf("Creating remote directory: %s\n", remoteItemPath)
+			c.Mkdir(remoteItemPath)
+		} else {
+			remoteParentDir := path.Dir(remoteItemPath)
+			fmt.Printf("Uploading file %s to %s\n", currentLocalPath, remoteParentDir)
+			err := c.uploadFile(currentLocalPath, remoteParentDir)
+			if err != nil {
+				return fmt.Errorf("failed to upload %s: %w", currentLocalPath, err)
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		fmt.Fprintf(os.Stderr, "Error during directory upload: %v\n", walkErr)
+		return
+	}
+	fmt.Println("Directory upload complete.")
+}
+
+// DownloadIgnore is like Download but skips remote files/dirs matching ignoreName (regex) when downloading directories
+func (c *Client) DownloadIgnore(remotePath, localPath, ignoreName string) {
+	info, err := os.Stat(localPath)
+	if err == nil && info.IsDir() {
+		baseName := filepath.Base(remotePath)
+		localPath = filepath.Join(localPath, baseName)
+	} else if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error accessing local path %s: %v\n", localPath, err)
+		return
+	}
+	isDir, err := c.isRemotePathDir(remotePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
+	}
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+	if !isDir {
+		if ignoreRegex != nil && shouldIgnoreRegex(path.Base(remotePath), ignoreRegex) {
+			fmt.Printf("Ignoring file: %s\n", path.Base(remotePath))
+			return
+		}
+		if err := c.downloadFile(remotePath, localPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to download file: %v\n", err)
+		}
+		return
+	}
+	// Directory download with ignore
+	fmt.Printf("Downloading directory '%s' as a zip file to '%s' (ignoring '%s')...\n", remotePath, localPath, ignoreName)
+	// Instead of zip, recursively download, skipping ignored
+	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localPath, err)
+		return
+	}
+	var downloadDir func(string, string)
+	downloadDir = func(rPath, lPath string) {
+		items, err := c.listRemote(rPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to list remote directory %s: %v\n", rPath, err)
+			return
+		}
+		for _, item := range items {
+			if ignoreRegex != nil && shouldIgnoreRegex(item.Name, ignoreRegex) {
+				fmt.Printf("[DEBUG] download: skipping %s (matched ignore regex %q)\n", item.Name, ignoreName)
+				continue
+			}
+			remoteItemPath := path.Join(rPath, item.Name)
+			localItemPath := filepath.Join(lPath, item.Name)
+			if item.IsDir {
+				if err := os.MkdirAll(localItemPath, os.ModePerm); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localItemPath, err)
+					continue
+				}
+				downloadDir(remoteItemPath, localItemPath)
+			} else {
+				if err := c.downloadFile(remoteItemPath, localItemPath); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to download file: %v\n", err)
+				}
+			}
+		}
+	}
+	downloadDir(remotePath, localPath)
+	fmt.Println("Directory download complete.")
+}
+
+// shouldIgnoreRegex returns true if name matches the ignore regex
+func shouldIgnoreRegex(name string, ignoreRegex *regexp.Regexp) bool {
+	return ignoreRegex.MatchString(name)
 }
