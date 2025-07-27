@@ -38,7 +38,7 @@ type Client struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		fmt.Fprintln(os.Stderr, "Usage: goclient <command> [arguments...]")
 		os.Exit(1)
 	}
 
@@ -53,25 +53,21 @@ func main() {
 	args := os.Args[2:]
 
 	if err := client.getCredentials(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting credentials: %v\n", err)
 		os.Exit(1)
 	}
 
 	if cmd == "show" {
-		client.ShowConfig()
+		fmt.Printf("Version: %s\nURL: %s\nUsername: %s\n", version, client.Config.URL, client.Config.Username)
 		os.Exit(0)
 	}
 
 	if err := client.Login(); err != nil {
-		fmt.Fprintf(os.Stderr, "Login failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Commands that take a single path argument
 	singlePathCommands := map[string]func(string){
-		"mkdir":  client.Mkdir,
-		"rm":     client.Delete,
-		"delete": client.Delete,
+		"mkdir": client.Mkdir,
 	}
 
 	// Commands that take two path arguments
@@ -104,12 +100,23 @@ func main() {
 		} else {
 			client.ListIgnore(remotePath, ignoreName)
 		}
-	} else if fn, ok := singlePathCommands[cmd]; ok {
-		if len(args) < 1 {
+	} else if cmd == "rm" || cmd == "delete" {
+		if len(newArgs) < 1 {
 			usage()
 			os.Exit(1)
 		}
-		fn(strings.Join(args, " "))
+		path := strings.Join(newArgs, " ")
+		if ignoreName != "" {
+			client.DeleteIgnore(path, ignoreName)
+		} else {
+			client.Delete(path)
+		}
+	} else if fn, ok := singlePathCommands[cmd]; ok {
+		if len(newArgs) < 1 {
+			usage()
+			os.Exit(1)
+		}
+		fn(strings.Join(newArgs, " "))
 	} else if cmd == "upload" {
 		if len(newArgs) < 1 || len(newArgs) > 2 {
 			usage()
@@ -259,7 +266,7 @@ func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
 		}
 		relPath = filepath.ToSlash(relPath)
 		if relPath == "." {
-			fmt.Printf("[DEBUG] walk: relPath=%q (root), info.Name()=%q\n", relPath, info.Name())
+
 			localPaths[relPath] = info
 			return nil
 		}
@@ -269,16 +276,16 @@ func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
 				if shouldIgnoreRegex(part, ignoreRegex) {
 					// If this is a directory, skip the whole subtree
 					if info.IsDir() {
-						fmt.Printf("[DEBUG] walk: relPath=%q, info.Name()=%q, SKIP DIR subtree (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+
 						return filepath.SkipDir
 					}
 					// If this is a file, skip the file
-					fmt.Printf("[DEBUG] walk: relPath=%q, info.Name()=%q, SKIP FILE (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+
 					return nil
 				}
 			}
 		}
-		fmt.Printf("[DEBUG] walk: relPath=%q, info.Name()=%q, KEEP\n", relPath, info.Name())
+
 		localPaths[relPath] = info
 		return nil
 	})
@@ -439,44 +446,39 @@ func (c *Client) SyncFromIgnore(remotePath, localPath, ignoreName string) {
 			localPathToDelete := filepath.Join(localPath, rel)
 			if info.IsDir() {
 				fmt.Printf("Deleting local directory not in remote: %s\n", localPathToDelete)
-				os.RemoveAll(localPathToDelete)
+				if err := os.RemoveAll(localPathToDelete); err != nil {
+					fmt.Fprintf(os.Stderr, "Error deleting directory: %v\n", err)
+				}
 			} else {
 				fmt.Printf("Deleting local file not in remote: %s\n", localPathToDelete)
-				os.Remove(localPathToDelete)
+				if err := os.Remove(localPathToDelete); err != nil {
+					fmt.Fprintf(os.Stderr, "Error deleting file: %v\n", err)
+				}
 			}
 		}
 	}
 }
 
 func (c *Client) getCredentials() error {
-	reader := bufio.NewReader(os.Stdin)
-
 	if c.Config.URL == "" {
 		fmt.Print("Enter File Browser URL: ")
-		url, err := reader.ReadString('\n')
-		if err != nil {
+		if _, err := fmt.Scanln(&c.Config.URL); err != nil {
 			return err
 		}
-		c.Config.URL = strings.TrimSpace(url)
 	}
 
 	if c.Config.Username == "" {
 		fmt.Print("Enter Username: ")
-		username, err := reader.ReadString('\n')
-		if err != nil {
+		if _, err := fmt.Scanln(&c.Config.Username); err != nil {
 			return err
 		}
-		c.Config.Username = strings.TrimSpace(username)
 	}
 
 	if c.Config.Password == "" {
 		fmt.Print("Enter Password: ")
-		// Get the file descriptor for stdin
 		fd := int(os.Stdin.Fd())
-
-		// Check if stdin is a terminal
 		if !term.IsTerminal(fd) {
-			// If not a terminal, just read the line as is (e.g., from a pipe)
+			reader := bufio.NewReader(os.Stdin)
 			password, err := reader.ReadString('\n')
 			if err != nil {
 				return err
@@ -485,44 +487,40 @@ func (c *Client) getCredentials() error {
 			return nil
 		}
 
-		// It's a terminal, so handle masked input
 		oldState, err := term.MakeRaw(fd)
 		if err != nil {
 			return err
 		}
 		defer func() {
 			if err := term.Restore(fd, oldState); err != nil {
-				fmt.Fprintf(os.Stderr, "Error restoring terminal: %v\n", err)
+				fmt.Fprintf(os.Stderr, "Error restoring terminal state: %v\n", err)
 			}
 		}()
 
 		var password []byte
-		var backspace = []byte{'', ' ', ''} // sequence to erase a character
-
+		var backspace = []byte{' ', ' ', ' '}
 		for {
 			var buf [1]byte
 			n, err := os.Stdin.Read(buf[:])
 			if err != nil || n == 0 {
 				return err
 			}
-
 			char := buf[0]
-
-			// Enter key
 			if char == '\r' || char == '\n' {
 				fmt.Print("\r\n")
 				break
 			}
-
-			// Backspace/Delete key (ASCII backspace is 8, delete is 127)
-			if char == 8 || char == 127 {
+			switch char {
+			case 8, 127:
 				if len(password) > 0 {
 					password = password[:len(password)-1]
-					os.Stdout.Write(backspace)
+					if _, err := os.Stdout.Write(backspace); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing backspace: %v\n", err)
+					}
 				}
-			} else if char == 3 { // Ctrl+C
+			case 3:
 				return fmt.Errorf("interrupted")
-			} else {
+			default:
 				password = append(password, char)
 				fmt.Print("*")
 			}
@@ -537,16 +535,16 @@ func usage() {
 	fmt.Printf("goclient version %s\n", version)
 	fmt.Print(`Usage: goclient <command> [arguments...]
 Commands:
-  ls [remote_path]                List file/directory names (optional remote_path)
-  list [remote_path]              List detailed info (like ls -la) (optional remote_path)
-  upload <local_path> [remote_dir]    Upload a file or directory (optional remote_dir)
-  download <remote_path> [local_path] Download a file or directory (optional local_path)
+  ls [-i ignore] [remote_path]        List file/directory names (optional remote_path)
+  list [-i ignore] [remote_path]      List detailed info (like ls -la) (optional remote_path)
+  upload [-i ignore] <local_path> [remote_dir] Upload a file or directory (optional remote_dir)
+  download [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
   mkdir <remote_path>                 Create a directory
-  rm <remote_path>                    Delete a file or directory
+  rm [-i ignore] <remote_path>        Delete a file or directory
   rename <old_path> <new_path>        Rename a file or directory
   show                              Show the current configuration
-  syncto <local_path> <remote_path>   Sync files from a local path to a remote path
-  syncfrom <remote_path> <local_path> Sync files from a remote path to a local path
+  syncto [-i ignore] <local_path> <remote_path>   Sync files from a local path to a remote path
+  syncfrom [-i ignore] <remote_path> <local_path> Sync files from a remote path to a local path
 `)
 }
 
@@ -586,7 +584,11 @@ func (c *Client) Login() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
@@ -603,7 +605,7 @@ func (c *Client) apiRequest(method, path string, body io.Reader, headers map[str
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/-goclient")
 	req.Header.Set("Accept", "*/*")
 	if c.Token != "" {
 		req.AddCookie(&http.Cookie{Name: "auth", Value: c.Token})
@@ -612,7 +614,8 @@ func (c *Client) apiRequest(method, path string, body io.Reader, headers map[str
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	return http.DefaultClient.Do(req)
+	client := &http.Client{}
+	return client.Do(req)
 }
 
 func (c *Client) Ls(remotePath string) {
@@ -621,7 +624,11 @@ func (c *Client) Ls(remotePath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
@@ -764,7 +771,11 @@ func (c *Client) List(remotePath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
@@ -877,7 +888,11 @@ func (c *Client) Mkdir(remotePath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 && resp.StatusCode != 409 { // 409 = already exists
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "Directory creation failed for '%s'. Server responded with HTTP %d.\n%s\n", remotePath, resp.StatusCode, string(b))
@@ -898,7 +913,11 @@ func (c *Client) Delete(remotePath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != 200 && resp.StatusCode != 204 {
 		b, _ := io.ReadAll(resp.Body)
@@ -906,6 +925,64 @@ func (c *Client) Delete(remotePath string) {
 		return
 	}
 	fmt.Println("Deletion complete.")
+}
+
+// DeleteIgnore deletes files and directories, ignoring entries matching ignoreName (regex)
+func (c *Client) DeleteIgnore(remotePath, ignoreName string) {
+	isDir, err := c.isRemotePathDir(remotePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking remote path: %v\n", err)
+		return
+	}
+
+	var ignoreRegex *regexp.Regexp
+	if ignoreName != "" {
+		var err error
+		ignoreRegex, err = regexp.Compile(ignoreName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
+			return
+		}
+	}
+
+	if !isDir {
+		// It's a file
+		if ignoreRegex != nil && shouldIgnoreRegex(path.Base(remotePath), ignoreRegex) {
+			fmt.Printf("Ignoring file: %s\n", remotePath)
+		} else {
+			c.Delete(remotePath)
+		}
+		return
+	}
+
+	// It's a directory, delete its contents recursively, honoring ignore
+	fmt.Printf("Deleting contents of '%s' (ignoring '%s')\n", remotePath, ignoreName)
+	c.deleteRecursive(remotePath, ignoreRegex)
+}
+
+// deleteRecursive is a helper to delete directory contents, honoring an ignore regex
+func (c *Client) deleteRecursive(remoteDirPath string, ignoreRegex *regexp.Regexp) {
+	items, err := c.listRemote(remoteDirPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list remote directory %s: %v\n", remoteDirPath, err)
+		return
+	}
+
+	for _, item := range items {
+		itemPath := path.Join(remoteDirPath, item.Name)
+		if ignoreRegex != nil && shouldIgnoreRegex(item.Name, ignoreRegex) {
+			fmt.Printf("Ignoring: %s\n", itemPath)
+			continue
+		}
+
+		if item.IsDir {
+			// Recursively delete contents of subdirectory first
+			c.deleteRecursive(itemPath, ignoreRegex)
+		}
+
+		// Delete the file or the now-empty directory
+		c.Delete(itemPath)
+	}
 }
 
 func (c *Client) Rename(oldPath, newPath string) {
@@ -917,7 +994,11 @@ func (c *Client) Rename(oldPath, newPath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "Rename failed: %s\n", string(b))
@@ -986,24 +1067,37 @@ func (c *Client) Upload(localPath, remoteDir string) {
 	fmt.Println("Directory upload complete.")
 }
 
+func closeFileWithDebug(file *os.File, location string) {
+	// fmt.Fprintf(os.Stderr, "Closing file at %s\n", location)
+	if err := file.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error closing file at %s: %v\n", location, err)
+	}
+}
+
 func (c *Client) uploadFile(localPath, remoteDir string) error {
 	file, err := os.Open(localPath)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
+
 	filename := filepath.Base(localPath)
 	remoteDirEnc := encodePathPreserveSlash(remoteDir)
 	filenameEnc := encodePathPreserveSlash(filename)
 	url := fmt.Sprintf("/api/resources%s/%s?override=true", remoteDirEnc, filenameEnc)
 	headers := map[string]string{"Content-Type": "application/octet-stream"}
+
+	// First attempt
 	resp, err := c.apiRequest("POST", url, file, headers)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+
+	// If 404, directory may not exist. Create it and retry.
 	if resp.StatusCode == 404 {
-		// Try to create directory, then retry upload
+		_ = resp.Body.Close()
 		c.Mkdir(remoteDir)
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return fmt.Errorf("failed to seek file: %w", err)
@@ -1012,12 +1106,18 @@ func (c *Client) uploadFile(localPath, remoteDir string) error {
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
 	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server response %d: %s", resp.StatusCode, string(b))
+		return fmt.Errorf("server response %d", resp.StatusCode)
 	}
+
+	// Read and discard the response body to ensure the upload is complete
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -1247,10 +1347,14 @@ func (c *Client) SyncFrom(remotePath, localPath string) {
 			localPathToDelete := filepath.Join(localPath, rel)
 			if info.IsDir() {
 				fmt.Printf("Deleting local directory not in remote: %s\n", localPathToDelete)
-				os.RemoveAll(localPathToDelete)
+				if err := os.RemoveAll(localPathToDelete); err != nil {
+					fmt.Fprintf(os.Stderr, "Error deleting directory: %v\n", err)
+				}
 			} else {
 				fmt.Printf("Deleting local file not in remote: %s\n", localPathToDelete)
-				os.Remove(localPathToDelete)
+				if err := os.Remove(localPathToDelete); err != nil {
+					fmt.Fprintf(os.Stderr, "Error deleting file: %v\n", err)
+				}
 			}
 		}
 	}
@@ -1335,7 +1439,11 @@ func (c *Client) getRemoteFileHash(remotePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	rawBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(rawBody))
@@ -1354,20 +1462,18 @@ func (c *Client) getRemoteFileHash(remotePath string) (string, error) {
 	return hash, nil
 }
 
-func getLocalFileHash(filePath string) (
-	string,
-	error,
-) {
+func getLocalFileHash(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer closeFileWithDebug(file, "getLocalFileHash")
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", err
 	}
+
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
@@ -1383,7 +1489,11 @@ func (c *Client) listRemote(remotePath string) ([]RemoteItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
@@ -1408,7 +1518,11 @@ func (c *Client) downloadFile(remotePath, localPath string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
@@ -1424,7 +1538,7 @@ func (c *Client) downloadFile(remotePath, localPath string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer closeFileWithDebug(out, "downloadFile")
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
@@ -1440,7 +1554,11 @@ func (c *Client) isRemotePathDir(remotePath string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != 200 {
 		// The filebrowser API returns 404 for not found
@@ -1519,7 +1637,11 @@ func (c *Client) Download(remotePath, localPath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
@@ -1532,7 +1654,7 @@ func (c *Client) Download(remotePath, localPath string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer out.Close()
+	defer closeFileWithDebug(out, "Download")
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
@@ -1566,7 +1688,11 @@ func (c *Client) LsIgnore(remotePath, ignoreName string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
@@ -1681,7 +1807,11 @@ func (c *Client) ListIgnore(remotePath, ignoreName string) {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
+		}
+	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
@@ -1828,10 +1958,10 @@ func (c *Client) UploadIgnore(localPath, remoteDir, ignoreName string) {
 			for _, part := range pathParts {
 				if shouldIgnoreRegex(part, ignoreRegex) {
 					if info.IsDir() {
-						fmt.Printf("[DEBUG] upload: relPath=%q, info.Name()=%q, SKIP DIR subtree (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+
 						return filepath.SkipDir
 					}
-					fmt.Printf("[DEBUG] upload: relPath=%q, info.Name()=%q, SKIP FILE (matched ignore regex %q)\n", relPath, info.Name(), ignoreName)
+
 					return nil
 				}
 			}
@@ -1906,7 +2036,7 @@ func (c *Client) DownloadIgnore(remotePath, localPath, ignoreName string) {
 		}
 		for _, item := range items {
 			if ignoreRegex != nil && shouldIgnoreRegex(item.Name, ignoreRegex) {
-				fmt.Printf("[DEBUG] download: skipping %s (matched ignore regex %q)\n", item.Name, ignoreName)
+
 				continue
 			}
 			remoteItemPath := path.Join(rPath, item.Name)

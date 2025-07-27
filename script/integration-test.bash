@@ -1,66 +1,67 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Create local files for testing uploads
-echo "--- Creating test assets ---"
-echo "hello world" > testfile.txt
-mkdir -p 'local test dir'
-echo "nested file" > 'local test dir/nested.txt'
+FBCLI=./fbcli
+TESTDIR="test-dir-$$"
+NESTEDDIR="local-test-dir-$$"
+TMPDL="downloaded_dir"
+TESTFILE="testfile.txt"
+NESTEDFILE="nested.txt"
 
-# Test the show command
-echo "--- Testing show command ---"
-./fbcli show
+fail() { echo "[FAIL] $*" >&2; exit 1; }
+pass() { echo "[PASS] $*"; }
 
-# Test creating a directory on the remote
-echo "--- Testing mkdir ---"
-./fbcli mkdir '/test dir'
+cleanup() {
+  rm -rf "$TESTFILE" "$NESTEDDIR" "$TMPDL"
+  # Remove all test/renamed dirs on remote
+  for d in $($FBCLI ls / | grep -E '^(test|renamed)[^ ]*' | awk '{print $1}'); do
+    $FBCLI rm "/$d" &>/dev/null || true
+  done
+  # Remove all test/renamed dirs locally
+  rm -rf test-* local-test-dir-* renamed-* downloaded_dir*
+}
+trap cleanup EXIT
 
-# Test uploading a single file
-echo "--- Testing single file upload ---"
-./fbcli upload testfile.txt '/test dir'
+setup() {
+  echo "hello world" > "$TESTFILE"
+  mkdir -p "$NESTEDDIR"
+  echo "nested file" > "$NESTEDDIR/$NESTEDFILE"
+}
 
-# Verify the single file upload by listing the remote directory
-echo "--- Verifying single file upload with ls ---"
-./fbcli ls '/test dir' | grep 'testfile.txt'
+main() {
+  setup
 
-# Test uploading a local directory
-echo "--- Testing directory upload ---"
-./fbcli upload 'local test dir' '/'
+  $FBCLI show || fail "show failed"
+  $FBCLI mkdir "/$TESTDIR" || fail "mkdir failed"
+  $FBCLI upload "$TESTFILE" "/$TESTDIR" || fail "upload file failed"
+  $FBCLI ls "/$TESTDIR" | grep "$TESTFILE" || fail "ls verify failed"
+  $FBCLI upload "$NESTEDDIR" "/" || fail "upload dir failed"
+  $FBCLI ls "/$NESTEDDIR" | grep "$NESTEDFILE" || fail "ls nested failed"
+  $FBCLI download "/$NESTEDDIR" "$TMPDL" || fail "download dir failed"
+  [ -f "$TMPDL/$NESTEDFILE" ] || fail "download verify failed"
+  $FBCLI mv "/$TESTDIR" "/renamed-dir" || fail "rename failed"
+  $FBCLI ls "/" | grep "renamed-dir" || fail "ls renamed failed"
 
-# Verify the directory upload by listing its contents on the remote
-echo "--- Verifying directory upload with ls ---"
-./fbcli ls '/local test dir' | grep 'nested.txt'
+  # Remove files/directories with wait/retry to ensure deletion
+  for path in "/renamed-dir/$TESTFILE" "/renamed-dir" "/$NESTEDDIR/$NESTEDFILE" "/$NESTEDDIR"; do
+    for i in {1..5}; do
+      $FBCLI rm "$path" && break
+      sleep 1
+    done
+  done
 
-# Test downloading a directory
-echo "--- Testing directory download ---"
-./fbcli download '/local test dir' 'downloaded_dir'
+  # Wait for deletions to propagate
+  for i in {1..5}; do
+    ! $FBCLI ls "/" | grep -qE "renamed-dir|$NESTEDDIR" && break
+    sleep 1
+  done
+  ! $FBCLI ls "/" | grep -qE "renamed-dir|$NESTEDDIR" || fail "cleanup verify failed"
 
-# Verify the downloaded directory's contents
-echo "--- Verifying directory download ---"
-ls | grep 'downloaded_dir'
-ls downloaded_dir | grep 'nested.txt'
+  pass "integration-test.bash"
+}
 
-# Test renaming a remote directory
-echo "--- Testing rename ---"
-./fbcli mv '/test dir' '/renamed dir'
 
-# Verify the rename by listing the parent directory
-echo "--- Verifying rename with ls ---"
-./fbcli ls '/' | grep 'renamed dir'
-
-# Test removing the remote files and directories created during the test
-echo "--- Testing rm (cleanup) ---"
-./fbcli rm '/renamed dir/testfile.txt'
-./fbcli rm '/renamed dir'
-./fbcli rm '/local test dir/nested.txt'
-./fbcli rm '/local test dir'
-
-# Verify that the remote files and directories were deleted
-echo "--- Verifying deletion with ls ---"
-if ./fbcli ls '/' | grep -E 'renamed dir|local test dir'; then
-  echo "Error: A directory still exists after deletion."
-  exit 1
-fi
+main "$@"
 
 
 # Run ls/list ignore feature test
@@ -70,5 +71,9 @@ bash script/test-ls-list-ignore.bash
 # Run syncto/syncfrom ignore feature test
 echo "--- Running syncto/syncfrom ignore feature test ---"
 bash script/test-syncto-syncfrom-ignore.bash
+
+# Run rm/delete ignore feature test
+echo "--- Running rm/delete ignore feature test ---"
+bash script/test-rm-delete-ignore.bash
 
 echo "All tests passed!"
