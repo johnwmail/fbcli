@@ -1,9 +1,9 @@
-// ListIgnore lists files/directories with detailed info, ignoring entries matching ignoreName
-
 package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,12 +16,10 @@ import (
 	"sort"
 	"strings"
 
-	"crypto/sha256"
-	"encoding/hex"
-
-	// Removed syscall and unsafe imports
 	"golang.org/x/term"
 )
+
+const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 
 var version = "dev" // this will be set by the build process
 
@@ -579,7 +577,7 @@ func (c *Client) Login() error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -605,7 +603,7 @@ func (c *Client) apiRequest(method, path string, body io.Reader, headers map[str
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/-goclient")
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "*/*")
 	if c.Token != "" {
 		req.AddCookie(&http.Cookie{Name: "auth", Value: c.Token})
