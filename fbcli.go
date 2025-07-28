@@ -35,8 +35,10 @@ type Client struct {
 }
 
 func main() {
+	progName := filepath.Base(os.Args[0])
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: goclient <command> [arguments...]")
+		usage(progName)
 		os.Exit(1)
 	}
 
@@ -100,7 +102,7 @@ func main() {
 		}
 	} else if cmd == "rm" || cmd == "delete" {
 		if len(newArgs) < 1 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		path := strings.Join(newArgs, " ")
@@ -111,13 +113,13 @@ func main() {
 		}
 	} else if fn, ok := singlePathCommands[cmd]; ok {
 		if len(newArgs) < 1 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		fn(strings.Join(newArgs, " "))
 	} else if cmd == "upload" {
 		if len(newArgs) < 1 || len(newArgs) > 2 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		remotePath := "/"
@@ -128,11 +130,11 @@ func main() {
 	} else if cmd == "download" { // Special handling for download to allow optional localPath
 		if zipFlag && ignoreName != "" {
 			fmt.Fprintln(os.Stderr, "-z (zip) and -i (ignore) cannot be used together.")
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		if len(newArgs) < 1 || len(newArgs) > 2 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		remotePath := newArgs[0]
@@ -194,25 +196,25 @@ func main() {
 		}
 	} else if fn, ok := twoPathCommands[cmd]; ok {
 		if len(args) != 2 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		fn(args[0], args[1])
 	} else if cmd == "syncto" {
 
 		if len(newArgs) != 2 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		client.SyncToIgnore(newArgs[0], newArgs[1], ignoreName)
 	} else if cmd == "syncfrom" {
 		if len(newArgs) != 2 {
-			usage()
+			usage(progName)
 			os.Exit(1)
 		}
 		client.SyncFromIgnore(newArgs[0], newArgs[1], ignoreName)
 	} else {
-		usage()
+		usage(progName)
 		os.Exit(1)
 	}
 
@@ -529,9 +531,10 @@ func (c *Client) getCredentials() error {
 	return nil
 }
 
-func usage() {
-	fmt.Printf("goclient version %s\n", version)
-	fmt.Print(`Usage: goclient <command> [arguments...]
+func usage(progName string) {
+	fmt.Printf("%s version %s\n", progName, version)
+	fmt.Printf("Usage: %s <command> [arguments...]\n", progName)
+	fmt.Print(`
 Commands:
   ls [-i ignore] [remote_path]        List file/directory names (optional remote_path)
   list [-i ignore] [remote_path]      List detailed info (like ls -la) (optional remote_path)
