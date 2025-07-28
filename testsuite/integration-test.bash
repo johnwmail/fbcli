@@ -65,8 +65,8 @@ main() {
 main "$@"
 
 
-# Run all sub test scripts in ./script/*.bash except this one, in sorted order
-for subtest in $(ls script/*.bash | grep -v integration-test.bash | sort); do
+# Run all sub test scripts in ./testsuite/*.bash except this one, in sorted order
+for subtest in $(ls testsuite/*.bash | grep -v integration-test.bash | sort); do
   echo "--- Running $(basename "$subtest") ---"
   bash "$subtest" || fail "$(basename "$subtest") failed"
 done

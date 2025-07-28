@@ -64,11 +64,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Commands that take a single path argument
-	singlePathCommands := map[string]func(string){
-		"mkdir": client.Mkdir,
-	}
-
 	// Commands that take two path arguments
 	twoPathCommands := map[string]func(string, string){
 		"rename": client.Rename,
@@ -110,11 +105,13 @@ func main() {
 				client.Delete(path)
 			}
 		}
-	} else if fn, ok := singlePathCommands[cmd]; ok {
+	} else if cmd == "mkdir" {
 		if len(newArgs) < 1 {
 			usage(progName)
 		}
-		fn(strings.Join(newArgs, " "))
+		for _, path := range newArgs {
+			client.Mkdir(path)
+		}
 	} else if cmd == "upload" {
 		if len(newArgs) < 1 || len(newArgs) > 2 {
 			usage(progName)
@@ -531,7 +528,7 @@ Commands:
   list [-i ignore] [remote_path]      List detailed info (like ls -la) (optional remote_path)
   upload [-i ignore] <local_path> [remote_dir] Upload a file or directory (optional remote_dir)
   download [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
-  mkdir <remote_path>                 Create a directory
+  mkdir <remote_path>...              Create one or more directories
   rm [-i ignore] <remote_path>...     Delete one or more files or directories
   rename <old_path> <new_path>        Rename a file or directory
   show                              Show the current configuration
