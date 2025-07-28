@@ -1,4 +1,4 @@
-module github.com/infrateam9/fbcli
+module github.com/johnwmail/fbcli
 
 go 1.24.4
 
