@@ -103,11 +103,12 @@ func main() {
 		if len(newArgs) < 1 {
 			usage(progName)
 		}
-		path := strings.Join(newArgs, " ")
-		if ignoreName != "" {
-			client.DeleteIgnore(path, ignoreName)
-		} else {
-			client.Delete(path)
+		for _, path := range newArgs {
+			if ignoreName != "" {
+				client.DeleteIgnore(path, ignoreName)
+			} else {
+				client.Delete(path)
+			}
 		}
 	} else if fn, ok := singlePathCommands[cmd]; ok {
 		if len(newArgs) < 1 {
@@ -531,7 +532,7 @@ Commands:
   upload [-i ignore] <local_path> [remote_dir] Upload a file or directory (optional remote_dir)
   download [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
   mkdir <remote_path>                 Create a directory
-  rm [-i ignore] <remote_path>        Delete a file or directory
+  rm [-i ignore] <remote_path>...     Delete one or more files or directories
   rename <old_path> <new_path>        Rename a file or directory
   show                              Show the current configuration
   syncto [-i ignore] <local_path> <remote_path>   Sync files from a local path to a remote path
@@ -823,8 +824,12 @@ func (c *Client) List(remotePath string) {
 		return sorted[i].Modified > sorted[j].Modified
 	})
 	// Print header
-	fmt.Printf("%-*s %-19s %-8s\n", maxName, "Name", "Modified", "Size")
-	fmt.Printf("%-*s %-19s %-8s\n", maxName, strings.Repeat("-", maxName), strings.Repeat("-", 19), strings.Repeat("-", 8))
+	pad := maxName
+	if pad < 0 {
+		pad = 0
+	}
+	fmt.Printf("%-*s %-19s %-8s\n", pad, "Name", "Modified", "Size")
+	fmt.Printf("%-*s %-19s %-8s\n", pad, strings.Repeat("-", pad), strings.Repeat("-", 19), strings.Repeat("-", 8))
 	const (
 		colorBlue  = "\033[1;34m"
 		colorReset = "\033[0m"
@@ -847,9 +852,17 @@ func (c *Client) List(remotePath string) {
 		visibleLen := len([]rune(name))
 		if e.IsDir {
 			colorName := colorBlue + name + colorReset
-			fmt.Printf("%s%s %-19s %-8d\n", colorName, strings.Repeat(" ", maxName-visibleLen), date, e.Size)
+			pad := maxName - visibleLen
+			if pad < 0 {
+				pad = 0
+			}
+			fmt.Printf("%s%s %-19s %-8d\n", colorName, strings.Repeat(" ", pad), date, e.Size)
 		} else {
-			fmt.Printf("%-*s %-19s %-8d\n", maxName, name, date, e.Size)
+			pad := maxName
+			if pad < 0 {
+				pad = 0
+			}
+			fmt.Printf("%-*s %-19s %-8d\n", pad, name, date, e.Size)
 		}
 	}
 }
@@ -1890,7 +1903,11 @@ func (c *Client) ListIgnore(remotePath, ignoreName string) {
 		visibleLen := len([]rune(name))
 		if e.IsDir {
 			colorName := colorBlue + name + colorReset
-			fmt.Printf("%s%s %-19s %-8d\n", colorName, strings.Repeat(" ", maxName-visibleLen), date, e.Size)
+			pad := maxName - visibleLen
+			if pad < 0 {
+				pad = 0
+			}
+			fmt.Printf("%s%s %-19s %-8d\n", colorName, strings.Repeat(" ", pad), date, e.Size)
 		} else {
 			fmt.Printf("%-*s %-19s %-8d\n", maxName, name, date, e.Size)
 		}
