@@ -39,7 +39,6 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: goclient <command> [arguments...]")
 		usage(progName)
-		os.Exit(1)
 	}
 
 	cfg := Config{
@@ -103,7 +102,6 @@ func main() {
 	} else if cmd == "rm" || cmd == "delete" {
 		if len(newArgs) < 1 {
 			usage(progName)
-			os.Exit(1)
 		}
 		path := strings.Join(newArgs, " ")
 		if ignoreName != "" {
@@ -114,13 +112,11 @@ func main() {
 	} else if fn, ok := singlePathCommands[cmd]; ok {
 		if len(newArgs) < 1 {
 			usage(progName)
-			os.Exit(1)
 		}
 		fn(strings.Join(newArgs, " "))
 	} else if cmd == "upload" {
 		if len(newArgs) < 1 || len(newArgs) > 2 {
 			usage(progName)
-			os.Exit(1)
 		}
 		remotePath := "/"
 		if len(newArgs) == 2 {
@@ -131,11 +127,9 @@ func main() {
 		if zipFlag && ignoreName != "" {
 			fmt.Fprintln(os.Stderr, "-z (zip) and -i (ignore) cannot be used together.")
 			usage(progName)
-			os.Exit(1)
 		}
 		if len(newArgs) < 1 || len(newArgs) > 2 {
 			usage(progName)
-			os.Exit(1)
 		}
 		remotePath := newArgs[0]
 		localPath := ""
@@ -197,25 +191,21 @@ func main() {
 	} else if fn, ok := twoPathCommands[cmd]; ok {
 		if len(args) != 2 {
 			usage(progName)
-			os.Exit(1)
 		}
 		fn(args[0], args[1])
 	} else if cmd == "syncto" {
 
 		if len(newArgs) != 2 {
 			usage(progName)
-			os.Exit(1)
 		}
 		client.SyncToIgnore(newArgs[0], newArgs[1], ignoreName)
 	} else if cmd == "syncfrom" {
 		if len(newArgs) != 2 {
 			usage(progName)
-			os.Exit(1)
 		}
 		client.SyncFromIgnore(newArgs[0], newArgs[1], ignoreName)
 	} else {
 		usage(progName)
-		os.Exit(1)
 	}
 
 }
@@ -547,6 +537,7 @@ Commands:
   syncto [-i ignore] <local_path> <remote_path>   Sync files from a local path to a remote path
   syncfrom [-i ignore] <remote_path> <local_path> Sync files from a remote path to a local path
 `)
+	os.Exit(1)
 }
 
 func (c *Client) ShowConfig() {
