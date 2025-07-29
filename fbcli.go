@@ -84,12 +84,12 @@ func main() {
 		}
 	}
 
-	if cmd == "ls" || cmd == "list" {
+	if cmd == "ls" || cmd == "list" || cmd == "dir" {
 		remotePath := "/"
 		if len(newArgs) > 0 {
 			remotePath = strings.Join(newArgs, " ")
 		}
-		if cmd == "ls" {
+		if cmd == "ls" || cmd == "dir" {
 			client.LsIgnore(remotePath, ignoreName)
 		} else {
 			client.ListIgnore(remotePath, ignoreName)
@@ -105,14 +105,14 @@ func main() {
 				client.Delete(path)
 			}
 		}
-	} else if cmd == "mkdir" {
+	} else if cmd == "mkdir" || cmd == "md" {
 		if len(newArgs) < 1 {
 			usage(progName)
 		}
 		for _, path := range newArgs {
 			client.Mkdir(path)
 		}
-	} else if cmd == "upload" {
+	} else if cmd == "upload" || cmd == "up" {
 		if len(newArgs) < 1 || len(newArgs) > 2 {
 			usage(progName)
 		}
@@ -121,7 +121,7 @@ func main() {
 			remotePath = newArgs[1]
 		}
 		client.UploadIgnore(newArgs[0], remotePath, ignoreName)
-	} else if cmd == "download" { // Special handling for download to allow optional localPath
+	} else if cmd == "download" || cmd == "get" || cmd == "down" || cmd == "dl" { // Special handling for download to allow optional localPath
 		if zipFlag && ignoreName != "" {
 			fmt.Fprintln(os.Stderr, "-z (zip) and -i (ignore) cannot be used together.")
 			usage(progName)
@@ -191,13 +191,12 @@ func main() {
 			usage(progName)
 		}
 		fn(args[0], args[1])
-	} else if cmd == "syncto" {
-
+	} else if cmd == "syncto" || cmd == "to" {
 		if len(newArgs) != 2 {
 			usage(progName)
 		}
 		client.SyncToIgnore(newArgs[0], newArgs[1], ignoreName)
-	} else if cmd == "syncfrom" {
+	} else if cmd == "syncfrom" || cmd == "from" {
 		if len(newArgs) != 2 {
 			usage(progName)
 		}
@@ -524,16 +523,16 @@ func usage(progName string) {
 	fmt.Printf("Usage: %s <command> [arguments...]\n", progName)
 	fmt.Print(`
 Commands:
-  ls [-i ignore] [remote_path]        List file/directory names (optional remote_path)
-  list [-i ignore] [remote_path]      List detailed info (like ls -la) (optional remote_path)
-  upload [-i ignore] <local_path> [remote_dir] Upload a file or directory (optional remote_dir)
-  download [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
-  mkdir <remote_path>...              Create one or more directories
-  rm [-i ignore] <remote_path>...     Delete one or more files or directories
-  rename <old_path> <new_path>        Rename a file or directory
-  show                              Show the current configuration
-  syncto [-i ignore] <local_path> <remote_path>   Sync files from a local path to a remote path
-  syncfrom [-i ignore] <remote_path> <local_path> Sync files from a remote path to a local path
+  ls, dir [-i ignore] [remote_path]        List file/directory names (optional remote_path)
+  list [-i ignore] [remote_path]           List detailed info (like ls -la) (optional remote_path)
+  upload, up [-i ignore] <local_path> [remote_dir] Upload a file or directory (optional remote_dir)
+  download, get, down, dl [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
+  mkdir, md <remote_path>...               Create one or more directories
+  rm, delete [-i ignore] <remote_path>...  Delete one or more files or directories
+  rename, mv <old_path> <new_path>         Rename a file or directory
+  show                                   Show the current configuration
+  syncto, to [-i ignore] <local_path> <remote_path>   Sync files from a local path to a remote path
+  syncfrom, from [-i ignore] <remote_path> <local_path> Sync files from a remote path to a local path
 `)
 	os.Exit(1)
 }
