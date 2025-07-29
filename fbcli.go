@@ -867,12 +867,12 @@ func (c *Client) Mkdir(remotePath string) {
 	cleanPath := strings.TrimSpace(remotePath)
 	if cleanPath == "/" || cleanPath == "" {
 		fmt.Fprintln(os.Stderr, "Cannot create root directory.")
-		return
+		os.Exit(1)
 	}
 	trimmed := strings.Trim(cleanPath, "/")
 	if trimmed == "" {
 		fmt.Fprintln(os.Stderr, "Invalid directory name.")
-		return
+		os.Exit(1)
 	}
 	// Use POST, no trailing slash, set browser-like headers
 	encoded := encodeSegments(remotePath)
@@ -887,7 +887,7 @@ func (c *Client) Mkdir(remotePath string) {
 	resp, err := c.apiRequest("POST", url, nil, headers)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return
+		os.Exit(1)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -897,7 +897,7 @@ func (c *Client) Mkdir(remotePath string) {
 	if resp.StatusCode != 200 && resp.StatusCode != 409 { // 409 = already exists
 		b, _ := io.ReadAll(resp.Body)
 		fmt.Fprintf(os.Stderr, "Directory creation failed for '%s'. Server responded with HTTP %d.\n%s\n", remotePath, resp.StatusCode, string(b))
-		return
+		os.Exit(1)
 	}
 	fmt.Printf("Directory created: %s\n", remotePath)
 }
