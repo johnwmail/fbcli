@@ -6,3 +6,4 @@
 6. the subscript will show excetly, whcih command cause failed, and the verify output
 7. the main script will show test which command passed, like  [PASSED] $subscript_name
 8. if needs to update fbcli.go (go source code), we should run "go fmt , go vet , golangci-lint run , go build -o fbcli fbcli.go" to update the binary. after updated the binary willout any errro, pls commit the changes and push to the repo.
+9. if any command return "API 404", then fbcli should be exit(1).

@@ -23,6 +23,15 @@ const userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, li
 
 var version = "dev" // this will be set by the build process
 
+// exitWithError prints an error message to stderr and exits with code 1
+func exitWithError(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, format, args...)
+	if !strings.HasSuffix(format, "\n") {
+		fmt.Fprintln(os.Stderr)
+	}
+	os.Exit(1)
+}
+
 type Config struct {
 	URL      string
 	Username string
@@ -212,8 +221,7 @@ func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
 	fmt.Printf("Syncing from local '%s' to remote '%s' (ignoring '%s')\n", localPath, remotePath, ignoreName)
 	info, err := os.Stat(localPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error accessing local path: %v\n", err)
-		return
+		exitWithError("Error accessing local path: %v", err)
 	}
 	if !info.IsDir() {
 		var ignoreRegex *regexp.Regexp
@@ -610,8 +618,7 @@ func (c *Client) apiRequest(method, path string, body io.Reader, headers map[str
 func (c *Client) Ls(remotePath string) {
 	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -620,8 +627,7 @@ func (c *Client) Ls(remotePath string) {
 	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
-		return
+		exitWithError("API error %d: %s", resp.StatusCode, string(b))
 	}
 	var data struct {
 		Items []struct {
@@ -631,8 +637,7 @@ func (c *Client) Ls(remotePath string) {
 		}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to decode response:", err)
-		return
+		exitWithError("Failed to decode response: %v", err)
 	}
 	// Deduplicate by normalized name, keep most recent Modified
 	type entry struct {
@@ -757,8 +762,7 @@ func getTerminalWidth() (int, bool) {
 func (c *Client) List(remotePath string) {
 	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -767,8 +771,7 @@ func (c *Client) List(remotePath string) {
 	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
-		return
+		exitWithError("API error %d: %s", resp.StatusCode, string(b))
 	}
 	var data struct {
 		Items []struct {
@@ -779,8 +782,7 @@ func (c *Client) List(remotePath string) {
 		}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to decode response:", err)
-		return
+		exitWithError("Failed to decode response: %v", err)
 	}
 	// Deduplicate by normalized name, keep most recent Modified
 	type entry struct {
@@ -866,13 +868,11 @@ func (c *Client) List(remotePath string) {
 func (c *Client) Mkdir(remotePath string) {
 	cleanPath := strings.TrimSpace(remotePath)
 	if cleanPath == "/" || cleanPath == "" {
-		fmt.Fprintln(os.Stderr, "Cannot create root directory.")
-		os.Exit(1)
+		exitWithError("Cannot create root directory.")
 	}
 	trimmed := strings.Trim(cleanPath, "/")
 	if trimmed == "" {
-		fmt.Fprintln(os.Stderr, "Invalid directory name.")
-		os.Exit(1)
+		exitWithError("Invalid directory name.")
 	}
 	// Use POST, no trailing slash, set browser-like headers
 	encoded := encodeSegments(remotePath)
@@ -886,8 +886,7 @@ func (c *Client) Mkdir(remotePath string) {
 	}
 	resp, err := c.apiRequest("POST", url, nil, headers)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -896,8 +895,7 @@ func (c *Client) Mkdir(remotePath string) {
 	}()
 	if resp.StatusCode != 200 && resp.StatusCode != 409 { // 409 = already exists
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Directory creation failed for '%s'. Server responded with HTTP %d.\n%s\n", remotePath, resp.StatusCode, string(b))
-		os.Exit(1)
+		exitWithError("Directory creation failed for '%s'. Server responded with HTTP %d.\n%s", remotePath, resp.StatusCode, string(b))
 	}
 	fmt.Printf("Directory created: %s\n", remotePath)
 }
@@ -905,14 +903,12 @@ func (c *Client) Mkdir(remotePath string) {
 func (c *Client) Delete(remotePath string) {
 	encoded := encodePathPreserveSlash(remotePath)
 	if encoded == "" {
-		fmt.Fprintln(os.Stderr, "Invalid path.")
-		return
+		exitWithError("Invalid path.")
 	}
 
 	resp, err := c.apiRequest("DELETE", "/api/resources"+encoded, nil, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -922,8 +918,7 @@ func (c *Client) Delete(remotePath string) {
 
 	if resp.StatusCode != 200 && resp.StatusCode != 204 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Delete failed: %s\n", string(b))
-		return
+		exitWithError("Delete failed: %s", string(b))
 	}
 	fmt.Println("Deletion complete.")
 }
@@ -932,8 +927,7 @@ func (c *Client) Delete(remotePath string) {
 func (c *Client) DeleteIgnore(remotePath, ignoreName string) {
 	isDir, err := c.isRemotePathDir(remotePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error checking remote path: %v\n", err)
-		return
+		exitWithError("Error checking remote path: %v", err)
 	}
 
 	var ignoreRegex *regexp.Regexp
@@ -941,8 +935,7 @@ func (c *Client) DeleteIgnore(remotePath, ignoreName string) {
 		var err error
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 
@@ -965,8 +958,7 @@ func (c *Client) DeleteIgnore(remotePath, ignoreName string) {
 func (c *Client) deleteRecursive(remoteDirPath string, ignoreRegex *regexp.Regexp) {
 	items, err := c.listRemote(remoteDirPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to list remote directory %s: %v\n", remoteDirPath, err)
-		return
+		exitWithError("Failed to list remote directory %s: %v", remoteDirPath, err)
 	}
 
 	for _, item := range items {
@@ -992,8 +984,7 @@ func (c *Client) Rename(oldPath, newPath string) {
 	url := fmt.Sprintf("/api/resources%s?action=rename&destination=%s&override=false&rename=false", oldP, newP)
 	resp, err := c.apiRequest("PATCH", url, nil, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -1002,8 +993,7 @@ func (c *Client) Rename(oldPath, newPath string) {
 	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Rename failed: %s\n", string(b))
-		return
+		exitWithError("Rename failed: %s", string(b))
 	}
 	fmt.Println("Rename complete.")
 }
@@ -1011,14 +1001,13 @@ func (c *Client) Rename(oldPath, newPath string) {
 func (c *Client) Upload(localPath, remoteDir string) {
 	info, err := os.Stat(localPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error accessing local path:", err)
-		return
+		exitWithError("Error accessing local path: %v", err)
 	}
 
 	if !info.IsDir() {
 		err := c.uploadFile(localPath, remoteDir)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Upload failed: %v\n", err)
+			exitWithError("Upload failed: %v", err)
 		} else {
 			fmt.Println("Upload complete.")
 		}
@@ -1126,8 +1115,7 @@ func (c *Client) SyncTo(localPath, remotePath string) {
 	fmt.Printf("Syncing from local '%s' to remote '%s'\n", localPath, remotePath)
 	info, err := os.Stat(localPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error accessing local path: %v\n", err)
-		return
+		exitWithError("Error accessing local path: %v", err)
 	}
 
 	if !info.IsDir() {
@@ -1605,14 +1593,12 @@ func (c *Client) Download(remotePath, localPath string) {
 		localPath = filepath.Join(localPath, baseName)
 	} else if err != nil && !os.IsNotExist(err) {
 		// It's some other error with the local path (e.g., permission denied)
-		fmt.Fprintf(os.Stderr, "Error accessing local path %s: %v\n", localPath, err)
-		return
+		exitWithError("Error accessing local path %s: %v", localPath, err)
 	}
 
 	isDir, err := c.isRemotePathDir(remotePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		exitWithError("Error: %v", err)
 	}
 
 	// If downloading a directory, ensure .zip suffix
@@ -1635,8 +1621,7 @@ func (c *Client) Download(remotePath, localPath string) {
 
 	resp, err := c.apiRequest("GET", downloadURL, nil, headers)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -1646,21 +1631,18 @@ func (c *Client) Download(remotePath, localPath string) {
 
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "Download failed: %s\n", string(b))
-		return
+		exitWithError("Download failed: %s", string(b))
 	}
 
 	out, err := os.Create(localPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer closeFileWithDebug(out, "Download")
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error saving downloaded file:", err)
-		return
+		exitWithError("Error saving downloaded file: %v", err)
 	}
 	fmt.Println("Download complete.")
 }
@@ -1686,8 +1668,7 @@ func encodeSegments(p string) string {
 func (c *Client) LsIgnore(remotePath, ignoreName string) {
 	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -1696,8 +1677,7 @@ func (c *Client) LsIgnore(remotePath, ignoreName string) {
 	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
-		return
+		exitWithError("API error %d: %s", resp.StatusCode, string(b))
 	}
 	var data struct {
 		Items []struct {
@@ -1707,8 +1687,7 @@ func (c *Client) LsIgnore(remotePath, ignoreName string) {
 		}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to decode response:", err)
-		return
+		exitWithError("Failed to decode response: %v", err)
 	}
 	// Deduplicate by normalized name, keep most recent Modified
 	type entry struct {
@@ -1722,8 +1701,7 @@ func (c *Client) LsIgnore(remotePath, ignoreName string) {
 		var err error
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 	for _, item := range data.Items {
@@ -1805,8 +1783,7 @@ func (c *Client) LsIgnore(remotePath, ignoreName string) {
 func (c *Client) ListIgnore(remotePath, ignoreName string) {
 	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		exitWithError("%v", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -1815,8 +1792,7 @@ func (c *Client) ListIgnore(remotePath, ignoreName string) {
 	}()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		fmt.Fprintf(os.Stderr, "API error %d: %s", resp.StatusCode, string(b))
-		return
+		exitWithError("API error %d: %s", resp.StatusCode, string(b))
 	}
 	var data struct {
 		Items []struct {
@@ -1827,8 +1803,7 @@ func (c *Client) ListIgnore(remotePath, ignoreName string) {
 		}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to decode response:", err)
-		return
+		exitWithError("Failed to decode response: %v", err)
 	}
 	type entry struct {
 		Name     string
@@ -1914,15 +1889,13 @@ func (c *Client) ListIgnore(remotePath, ignoreName string) {
 func (c *Client) UploadIgnore(localPath, remoteDir, ignoreName string) {
 	info, err := os.Stat(localPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error accessing local path:", err)
-		return
+		exitWithError("Error accessing local path: %v", err)
 	}
 	var ignoreRegex *regexp.Regexp
 	if ignoreName != "" {
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 	if !info.IsDir() {
@@ -1999,13 +1972,11 @@ func (c *Client) DownloadIgnore(remotePath, localPath, ignoreName string) {
 		baseName := filepath.Base(remotePath)
 		localPath = filepath.Join(localPath, baseName)
 	} else if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error accessing local path %s: %v\n", localPath, err)
-		return
+		exitWithError("Error accessing local path %s: %v", localPath, err)
 	}
 	isDir, err := c.isRemotePathDir(remotePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		exitWithError("Error: %v", err)
 	}
 	var ignoreRegex *regexp.Regexp
 	if ignoreName != "" {
