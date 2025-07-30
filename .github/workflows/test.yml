@@ -21,6 +21,8 @@ jobs:
         with:
           go-version: '>=1.24'
           cache: true
+      - name: Download Go modules
+        run: go mod download -x
       - name: Check code formatting
         run: |
           UNFORMATTED=$(gofmt -l .)
@@ -66,18 +68,8 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache: true
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ matrix.arch }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.go }}-${{ matrix.arch }}-
-            ${{ runner.os }}-go-${{ matrix.go }}-
       - name: Download Go modules
-        run: go mod download
+        run: go mod download -x
       - name: Wait for filebrowser to be ready
         run: |
           echo "Waiting for filebrowser service to start..."
@@ -121,17 +113,8 @@ jobs:
         with:
           go-version: '>=1.24'
           cache: true
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~\AppData\Local\go-build
-            ~\go\pkg\mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
       - name: Download Go modules
-        run: go mod download
+        run: go mod download -x
       - name: Build and Smoke Test
         env:
           CGO_ENABLED: 0
