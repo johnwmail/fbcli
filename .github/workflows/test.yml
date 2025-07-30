@@ -2,9 +2,9 @@ name: Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, sonnet4 ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, sonnet4 ]
 
 permissions:
   contents: read
@@ -106,7 +106,7 @@ jobs:
           FILEBROWSER_URL: http://localhost:8080
           FILEBROWSER_USERNAME: admin
           FILEBROWSER_PASSWORD: ${{ steps.fblog.outputs.fbpass }}
-        run: bash testsuite/integration-test.bash
+        run: bash testsuite/run-tests.bash
 
   test-smoke:
     name: Smoke Test (Windows/amd64)
