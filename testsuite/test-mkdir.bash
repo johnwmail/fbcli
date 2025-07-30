@@ -57,6 +57,6 @@ assert "mkdir on existing directory succeeds" ./fbcli mkdir "$REMOTE_DIR1"
 
 # Test 7: Error handling - invalid path
 step "Testing invalid path"
-assert_fails "mkdir fails with invalid path" ./fbcli mkdir "/invalid/deeply/nested/path/that/should/fail"
+assert_fails "mkdir fails with empty path" ./fbcli mkdir ""
 
 finish_test
