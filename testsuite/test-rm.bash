@@ -15,6 +15,7 @@ step "Setting up test environment"
 
 # Create local files to upload first
 create_test_dir "$LOCAL_SETUP_DIR" 3
+track_local "$LOCAL_SETUP_DIR"
 create_test_file "$LOCAL_SETUP_DIR/ignore-me.txt" "ignore this file"
 create_test_file "$LOCAL_SETUP_DIR/delete-me1.txt" "delete this file 1"
 create_test_file "$LOCAL_SETUP_DIR/delete-me2.txt" "delete this file 2"

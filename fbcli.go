@@ -81,6 +81,8 @@ func main() {
 
 	ignoreName := ""
 	zipFlag := false
+	scriptFlag := false
+	listFlag := false
 	newArgs := []string{}
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-i" && i+1 < len(args) {
@@ -88,6 +90,10 @@ func main() {
 			i++
 		} else if args[i] == "-z" {
 			zipFlag = true
+		} else if args[i] == "-s" || args[i] == "--script" {
+			scriptFlag = true
+		} else if args[i] == "-l" {
+			listFlag = true
 		} else {
 			newArgs = append(newArgs, args[i])
 		}
@@ -98,10 +104,12 @@ func main() {
 		if len(newArgs) > 0 {
 			remotePath = strings.Join(newArgs, " ")
 		}
-		if cmd == "ls" || cmd == "dir" {
-			client.LsIgnore(remotePath, ignoreName)
-		} else {
+		if listFlag || cmd == "list" || cmd == "dir" {
+			// Detailed list view (like ls -l)
 			client.ListIgnore(remotePath, ignoreName)
+		} else {
+			// Regular ls view (multi-column or script mode)
+			client.LsIgnoreScript(remotePath, ignoreName, scriptFlag)
 		}
 	} else if cmd == "rm" || cmd == "delete" {
 		if len(newArgs) < 1 {
@@ -130,7 +138,7 @@ func main() {
 			remotePath = newArgs[1]
 		}
 		client.UploadIgnore(newArgs[0], remotePath, ignoreName)
-	} else if cmd == "download" || cmd == "get" || cmd == "down" || cmd == "dl" { // Special handling for download to allow optional localPath
+	} else if cmd == "download" || cmd == "down" || cmd == "dl" { // Special handling for download to allow optional localPath
 		if zipFlag && ignoreName != "" {
 			fmt.Fprintln(os.Stderr, "-z (zip) and -i (ignore) cannot be used together.")
 			usage(progName)
@@ -524,10 +532,12 @@ func usage(progName string) {
 	fmt.Printf("Usage: %s <command> [arguments...]\n", progName)
 	fmt.Print(`
 Commands:
-  ls, dir [-i ignore] [remote_path]        List file/directory names (optional remote_path)
-  list [-i ignore] [remote_path]           List detailed info (like ls -la) (optional remote_path)
+  ls [-i ignore] [-l] [-s] [remote_path]       List files/directories (optional remote_path)
+                                               -l: detailed view with sizes and dates
+                                               -s: script-friendly output (one per line, no colors)
+  list, dir [-i ignore] [remote_path]          List detailed info (like ls -l) (optional remote_path)
   upload, up [-i ignore] <local_path> [remote_dir] Upload a file or directory (optional remote_dir)
-  download, get, down, dl [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
+  download, down, dl [-i ignore] [-z] <remote_path> [local_path] Download a file or directory (optional local_path)
   mkdir, md <remote_path>...               Create one or more directories
   rm, delete [-i ignore] <remote_path>...  Delete one or more files or directories
   rename, mv <old_path> <new_path>         Rename a file or directory
@@ -1653,7 +1663,7 @@ func encodeSegments(p string) string {
 	return "/" + strings.Join(parts, "/")
 }
 
-func (c *Client) LsIgnore(remotePath, ignoreName string) {
+func (c *Client) LsIgnoreScript(remotePath, ignoreName string, scriptMode bool) {
 	resp, err := c.apiRequest("GET", "/api/resources"+encodePathPreserveSlash(remotePath), nil, nil)
 	if err != nil {
 		exitWithError("%v", err)
@@ -1715,6 +1725,23 @@ func (c *Client) LsIgnore(remotePath, ignoreName string) {
 		}
 		return sorted[i].Modified > sorted[j].Modified
 	})
+
+	// Print output
+	if scriptMode {
+		// Script-friendly mode: one name per line, no colors, no formatting
+		for _, e := range sorted {
+			name := e.Name
+			name = strings.ReplaceAll(name, "\n", "")
+			name = strings.ReplaceAll(name, "\r", "")
+			if e.IsDir && !strings.HasSuffix(name, "/") {
+				name += "/"
+			}
+			fmt.Println(name)
+		}
+		return
+	}
+
+	// Human-friendly mode: multi-column with colors
 	// Print like bash: tab-separated, trailing slash for dirs
 	const (
 		colorBlue  = "\033[1;34m"
