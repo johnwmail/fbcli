@@ -46,7 +46,7 @@ type Client struct {
 func main() {
 	progName := filepath.Base(os.Args[0])
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: goclient <command> [arguments...]")
+		fmt.Fprintf(os.Stderr, "Usage: %s <command> [arguments...]\n", progName)
 		usage(progName)
 	}
 
@@ -229,8 +229,7 @@ func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
 			var err error
 			ignoreRegex, err = regexp.Compile(ignoreName)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-				return
+				exitWithError("Invalid ignore regex: %v", err)
 			}
 		}
 		if ignoreRegex != nil && shouldIgnoreRegex(info.Name(), ignoreRegex) {
@@ -247,8 +246,7 @@ func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
 		var err error
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 	walkErr := filepath.Walk(localPath, func(currentLocalPath string, info os.FileInfo, err error) error {
@@ -285,8 +283,7 @@ func (c *Client) SyncToIgnore(localPath, remotePath, ignoreName string) {
 		return nil
 	})
 	if walkErr != nil {
-		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
-		return
+		exitWithError("Error walking local path: %v", walkErr)
 	}
 	for relPath, info := range localPaths {
 		if relPath == "." {
@@ -349,14 +346,12 @@ func (c *Client) SyncFromIgnore(remotePath, localPath, ignoreName string) {
 		var err error
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 	isDir, err := c.isRemotePathDir(remotePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error checking remote path type: %v\n", err)
-		return
+		exitWithError("Error checking remote path type: %v", err)
 	}
 	if !isDir {
 		if ignoreRegex != nil && shouldIgnoreRegex(path.Base(remotePath), ignoreRegex) {
@@ -368,8 +363,7 @@ func (c *Client) SyncFromIgnore(remotePath, localPath, ignoreName string) {
 	}
 	fmt.Printf("Syncing remote directory '%s' to local '%s' (ignoring '%s')\n", remotePath, localPath, ignoreName)
 	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localPath, err)
-		return
+		exitWithError("Failed to create directory %s: %v", localPath, err)
 	}
 	remoteItems := make(map[string]RemoteItem)
 	var collectRemote func(string, string, bool)
@@ -408,8 +402,7 @@ func (c *Client) SyncFromIgnore(remotePath, localPath, ignoreName string) {
 		return nil
 	})
 	if walkErr != nil {
-		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
-		return
+		exitWithError("Error walking local path: %v", walkErr)
 	}
 	for rel, item := range remoteItems {
 		exists := false
@@ -893,7 +886,7 @@ func (c *Client) Mkdir(remotePath string) {
 			fmt.Fprintf(os.Stderr, "Error closing response body: %v\n", err)
 		}
 	}()
-	if resp.StatusCode != 200 && resp.StatusCode != 409 { // 409 = already exists
+	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
 		exitWithError("Directory creation failed for '%s'. Server responded with HTTP %d.\n%s", remotePath, resp.StatusCode, string(b))
 	}
@@ -1050,8 +1043,7 @@ func (c *Client) Upload(localPath, remoteDir string) {
 		return nil
 	})
 	if walkErr != nil {
-		fmt.Fprintf(os.Stderr, "Error during directory upload: %v\n", walkErr)
-		return
+		exitWithError("Error during directory upload: %v", walkErr)
 	}
 
 	fmt.Println("Directory upload complete.")
@@ -1142,8 +1134,7 @@ func (c *Client) SyncTo(localPath, remotePath string) {
 		return nil
 	})
 	if walkErr != nil {
-		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
-		return
+		exitWithError("Error walking local path: %v", walkErr)
 	}
 
 	// Sync local to remote (create/update)
@@ -1253,8 +1244,7 @@ func (c *Client) syncFileToRemote(localPath, remotePath string, localFileInfo os
 func (c *Client) SyncFrom(remotePath, localPath string) {
 	isDir, err := c.isRemotePathDir(remotePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error checking remote path type: %v\n", err)
-		return
+		exitWithError("Error checking remote path type: %v", err)
 	}
 
 	if !isDir {
@@ -1266,8 +1256,7 @@ func (c *Client) SyncFrom(remotePath, localPath string) {
 	// It's a directory
 	fmt.Printf("Syncing remote directory '%s' to local '%s'\n", remotePath, localPath)
 	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localPath, err)
-		return
+		exitWithError("Failed to create directory %s: %v", localPath, err)
 	}
 
 	// Collect all remote items
@@ -1303,8 +1292,7 @@ func (c *Client) SyncFrom(remotePath, localPath string) {
 		return nil
 	})
 	if walkErr != nil {
-		fmt.Fprintf(os.Stderr, "Error walking local path: %v\n", walkErr)
-		return
+		exitWithError("Error walking local path: %v", walkErr)
 	}
 
 	// Download or update files/dirs from remote
@@ -1818,8 +1806,7 @@ func (c *Client) ListIgnore(remotePath, ignoreName string) {
 		var err error
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 	for _, item := range data.Items {
@@ -1959,8 +1946,7 @@ func (c *Client) UploadIgnore(localPath, remoteDir, ignoreName string) {
 		return nil
 	})
 	if walkErr != nil {
-		fmt.Fprintf(os.Stderr, "Error during directory upload: %v\n", walkErr)
-		return
+		exitWithError("Error during directory upload: %v", walkErr)
 	}
 	fmt.Println("Directory upload complete.")
 }
@@ -1982,8 +1968,7 @@ func (c *Client) DownloadIgnore(remotePath, localPath, ignoreName string) {
 	if ignoreName != "" {
 		ignoreRegex, err = regexp.Compile(ignoreName)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid ignore regex: %v\n", err)
-			return
+			exitWithError("Invalid ignore regex: %v", err)
 		}
 	}
 	if !isDir {
@@ -2000,8 +1985,7 @@ func (c *Client) DownloadIgnore(remotePath, localPath, ignoreName string) {
 	fmt.Printf("Downloading directory '%s' as a zip file to '%s' (ignoring '%s')...\n", remotePath, localPath, ignoreName)
 	// Instead of zip, recursively download, skipping ignored
 	if err := os.MkdirAll(localPath, os.ModePerm); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create directory %s: %v\n", localPath, err)
-		return
+		exitWithError("Failed to create directory %s: %v", localPath, err)
 	}
 	var downloadDir func(string, string)
 	downloadDir = func(rPath, lPath string) {
