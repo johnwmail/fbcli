@@ -14,6 +14,7 @@ LOCAL_SETUP_DIR="setup-download-$TEST_ID"
 step "Setting up test environment"
 # Create local files to upload first
 create_test_dir "$LOCAL_SETUP_DIR" 2
+track_local "$LOCAL_SETUP_DIR"
 create_test_file "$LOCAL_SETUP_DIR/download-me.txt" "download this file"
 create_test_file "$LOCAL_SETUP_DIR/another.txt" "another file"
 create_test_file "$LOCAL_SETUP_DIR/subdir/nested.txt" "nested file"
@@ -38,6 +39,7 @@ step "Testing download with ignore option"
 LOCAL_SETUP_DIR2="setup-download-ignore-$TEST_ID"
 REMOTE_DIR2="/test-download-ignore-$TEST_ID"
 create_test_dir "$LOCAL_SETUP_DIR2" 2
+track_local "$LOCAL_SETUP_DIR2"
 create_test_file "$LOCAL_SETUP_DIR2/include.txt" "include this"
 create_test_file "$LOCAL_SETUP_DIR2/ignore.log" "ignore this log"
 create_test_file "$LOCAL_SETUP_DIR2/keep.data" "keep this data"
@@ -52,5 +54,18 @@ track_local "$DOWNLOAD_IGNORE_DIR.zip"
 
 step "Testing error handling"
 assert_fails "Download fails on non-existent file" ./fbcli download "/non-existent-file-$TEST_ID.txt" "fail-download.txt"
+
+step "Testing command aliases"
+# Test down alias
+DOWN_FILE="down-alias-$TEST_ID.txt"
+assert "down alias works" ./fbcli down "$REMOTE_DIR/$LOCAL_SETUP_DIR/another.txt" "$DOWN_FILE"
+assert_exists "File downloaded with down alias" "$DOWN_FILE"
+track_local "$DOWN_FILE"
+
+# Test dl alias  
+DL_FILE="dl-alias-$TEST_ID.txt"
+assert "dl alias works" ./fbcli dl "$REMOTE_DIR/$LOCAL_SETUP_DIR/another.txt" "$DL_FILE"
+assert_exists "File downloaded with dl alias" "$DL_FILE"
+track_local "$DL_FILE"
 
 finish_test

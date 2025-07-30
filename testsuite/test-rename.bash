@@ -14,6 +14,7 @@ LOCAL_SETUP_DIR="setup-rename-$TEST_ID"
 step "Setting up test environment"
 # Create local files to upload first
 create_test_dir "$LOCAL_SETUP_DIR" 2
+track_local "$LOCAL_SETUP_DIR"
 create_test_file "$LOCAL_SETUP_DIR/original.txt" "original file content"
 create_test_file "$LOCAL_SETUP_DIR/subdir/nested.txt" "nested file"
 
