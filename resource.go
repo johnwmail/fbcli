@@ -550,6 +550,51 @@ func writeResponseToFile(reader io.Reader, localPath string) error {
 	return nil
 }
 
+// downloadRecursive downloads a file or directory tree without creating an archive.
+// It is used by the interactive shell so that "get" behaves like sftp.
+func (c *Client) downloadRecursive(remotePath, localPath, ignorePattern string) error {
+	ignore, err := compileIgnore(ignorePattern)
+	if err != nil {
+		return err
+	}
+
+	remotePath = normalizeRemotePath(remotePath)
+	item, err := c.getResource(remotePath)
+	if err != nil {
+		return err
+	}
+
+	if !item.IsDir {
+		if ignore != nil && ignore.MatchString(path.Base(remotePath)) {
+			fmt.Printf("Ignoring file: %s\n", remotePath)
+			return nil
+		}
+		target := resolveLocalFileTarget(remotePath, localPath)
+		if err := c.downloadFile(remotePath, target); err != nil {
+			return err
+		}
+		fmt.Println("Download complete.")
+		return nil
+	}
+
+	target := localPath
+	if target == "" {
+		target = path.Base(remotePath)
+	} else if info, statErr := os.Stat(target); statErr == nil && info.IsDir() {
+		target = filepath.Join(target, path.Base(remotePath))
+	}
+	if err := os.MkdirAll(target, os.ModePerm); err != nil {
+		return fmt.Errorf("create local directory %s: %w", target, err)
+	}
+
+	fmt.Printf("Downloading directory '%s' to '%s'...\n", remotePath, target)
+	if err := c.downloadTree(remotePath, target, ignore); err != nil {
+		return err
+	}
+	fmt.Println("Directory download complete.")
+	return nil
+}
+
 func resolveLocalFileTarget(remotePath, localPath string) string {
 	base := path.Base(remotePath)
 	if localPath == "" {

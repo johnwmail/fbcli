@@ -119,6 +119,11 @@ jobs:
 
             Command-line client for **FileBrowser Quantum v2** (tested with v2.0.1-stable).
 
+            Highlights:
+            - sftp-style interactive shell (`fbcli` with no arguments, or `fbcli shell`)
+            - Multi-source support with automatic discovery
+            - Bidirectional sync and scriptable one-shot commands
+
             ### Downloads
 
             - **Linux amd64**: `fbcli-linux-amd64.tar.gz`

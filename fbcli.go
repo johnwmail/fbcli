@@ -28,8 +28,21 @@ type commandOptions struct {
 func main() {
 	progName := filepath.Base(os.Args[0])
 	if len(os.Args) < 2 {
-		printUsage(os.Stderr, progName)
-		os.Exit(1)
+		// Like sftp, a bare invocation on a terminal starts the interactive shell.
+		// Keep the old usage/error behaviour for non-interactive callers so existing
+		// scripts do not accidentally block on stdin.
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			printUsage(os.Stderr, progName)
+			os.Exit(1)
+		}
+		client := NewClient(configFromEnv())
+		if err := connectClient(client); err != nil {
+			exitWithError("%v", err)
+		}
+		if err := RunShell(client); err != nil {
+			exitWithError("%v", err)
+		}
+		return
 	}
 
 	command := os.Args[1]
@@ -65,31 +78,8 @@ func main() {
 		return
 	}
 
-	if err := client.loadConfig(true); err != nil {
+	if err := connectClient(client); err != nil {
 		exitWithError("%v", err)
-	}
-
-	usedCache := client.LoadSession()
-	if !usedCache {
-		if err := client.Login(); err != nil {
-			exitWithError("Login failed: %v", err)
-		}
-		client.SaveSession()
-	}
-
-	if err := client.ResolveSource(); err != nil {
-		if !usedCache || !isUnauthorized(err) {
-			exitWithError("%v", err)
-		}
-		// A cached session may have expired or been revoked; log in once more.
-		client.Token = ""
-		if err := client.Login(); err != nil {
-			exitWithError("Login failed: %v", err)
-		}
-		client.SaveSession()
-		if err := client.ResolveSource(); err != nil {
-			exitWithError("%v", err)
-		}
 	}
 
 	if err := runCommand(client, command, options, args); err != nil {
@@ -97,8 +87,46 @@ func main() {
 	}
 }
 
+// connectClient loads credentials, restores or creates a session, and resolves the
+// source used by the command or interactive shell.
+func connectClient(client *Client) error {
+	if err := client.loadConfig(true); err != nil {
+		return err
+	}
+
+	usedCache := client.LoadSession()
+	if !usedCache {
+		if err := client.Login(); err != nil {
+			return fmt.Errorf("Login failed: %w", err)
+		}
+		client.SaveSession()
+	}
+
+	if err := client.ResolveSource(); err != nil {
+		if !usedCache || !isUnauthorized(err) {
+			return err
+		}
+		// A cached session may have expired or been revoked; log in once more.
+		client.Token = ""
+		if err := client.Login(); err != nil {
+			return fmt.Errorf("Login failed: %w", err)
+		}
+		client.SaveSession()
+		if err := client.ResolveSource(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func runCommand(client *Client, command string, options commandOptions, args []string) error {
 	switch command {
+	case "shell", "sftp", "interactive":
+		if len(args) > 0 {
+			return usageError(command)
+		}
+		return RunShell(client)
+
 	case "ls", "list", "dir":
 		remotePath := "/"
 		if len(args) > 0 {
@@ -316,6 +344,7 @@ func printUsage(out io.Writer, progName string) {
 	_, _ = fmt.Fprintf(out, "Usage: %s <command> [options] [arguments...]\n", progName)
 	_, _ = fmt.Fprint(out, `
 Commands:
+  shell, sftp, interactive                     Start the sftp-style interactive shell
   ls [-i ignore] [-l] [-s] [remote_path]        List files/directories
                                                 -l: detailed view with sizes and dates
                                                 -s: script-friendly output (one per line)
@@ -351,6 +380,10 @@ Environment:
 
 FileBrowser Quantum v2.x is required. The source defaults to the first source the
 account can access; use FILEBROWSER_SOURCE when multiple sources are configured.
+
+Run with no arguments on a terminal to start the interactive shell. Use
+'fbcli shell' explicitly, or pipe commands to it for batch use:
+  printf 'pwd\nls /\nexit\n' | fbcli shell
 `)
 }
 

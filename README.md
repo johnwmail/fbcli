@@ -13,6 +13,7 @@ This release is a full migration to the **FileBrowser Quantum v2 API** and targe
 ## Features
 
 - Full file operations: list, upload, download, mkdir, delete, rename/move
+- sftp-style interactive shell with remote/local contexts, tab completion, and history
 - Multi-source support with automatic source discovery
 - Directory downloads as server-side zip archives
 - Regex ignore patterns for uploads, downloads, deletes, and syncs
@@ -100,6 +101,57 @@ Successful logins are cached in the user cache directory (for example `~/.cache/
 To force a fresh login, delete the cache file or the `fbcli` cache directory. Set `XDG_CACHE_HOME` to relocate it on Linux.
 
 The login endpoint is rate limited per IP and username. If a login is rate limited, `fbcli` waits briefly and retries once; longer waits are reported to the caller.
+
+## Interactive shell
+
+Run `fbcli` with no arguments on a terminal, or use `fbcli shell` / `fbcli sftp` / `fbcli interactive`, to start an sftp-style interactive session:
+
+```text
+$ fbcli
+Connected to https://files.example.com
+Source: media
+Type 'help' for commands, 'exit' to quit.
+fbcli[media]:/> pwd
+/
+fbcli[media]:/> cd /projects
+fbcli[media]:/projects> lcd ~/Downloads
+fbcli[media]:/projects> lls
+fbcli[media]:/projects> put report.pdf
+fbcli[media]:/projects> get archive/ ./backup
+fbcli[media]:/projects> bye
+```
+
+The shell keeps separate remote and local working directories:
+
+| Command | Description |
+|---------|-------------|
+| `pwd`, `cd [path]` | Remote working directory; `cd` goes to `/`, `cd -` returns |
+| `lpwd`, `lcd [path]` | Local working directory; `lcd` goes to `~`, `lcd -` returns |
+| `ls [-l] [-s] [-i regex] [path]` | List a remote directory |
+| `lls [-l] [path]` | List a local directory |
+| `get [-r] [-z] [-i regex] <remote> [local]` | Download; directories are recursive by default |
+| `put [-r] [-i regex] <local> [remote]` | Upload; an explicit non-directory destination is the target file name |
+| `mkdir [-p] <path>...` | Create remote directories |
+| `rm [-i regex] <path>...` | Delete remote paths |
+| `rename`, `mv` | Rename or move a remote path |
+| `syncto [-i regex] <local> [remote]` | Mirror a local directory to the current/remote directory |
+| `syncfrom [-i regex] <remote> [local]` | Mirror a remote directory to the current/local directory |
+| `!<command>`, `!` | Run a local shell command, or start a local shell |
+| `help`, `version`, `exit` / `quit` / `bye` | Shell control |
+
+Paths are relative to the current remote/local directory unless they start with `/`; local paths may start with `~`.
+
+`get` uses recursive file-by-file transfer for directories, matching sftp. Use `get -z` to request a zip archive instead. `put` on a directory uploads it recursively.
+
+The shell supports command and path tab completion plus persistent history. History is stored next to the session cache, for example `~/.cache/fbcli/history`.
+
+The shell can also be scripted through stdin:
+
+```bash
+printf 'pwd\nls -s /\ncd /projects\nput report.pdf\nexit\n' | fbcli shell
+```
+
+A failed batch command prints an error and the shell exits non-zero after processing the rest of the script. The original one-shot commands (`fbcli ls`, `fbcli upload`, `fbcli download`, etc.) remain available for scripts and are unchanged.
 
 ## Commands
 
@@ -333,6 +385,7 @@ The v2 index reports disk usage for files. Use synchronization (which uses exact
 | `client.go` | HTTP client, auth, source discovery, API errors |
 | `resource.go` | List, upload, download, mkdir, delete, rename |
 | `sync.go` | One-way synchronization |
+| `shell.go` | sftp-style interactive shell, completion, history |
 | `output.go` | Listing formats, colors, hashing helpers |
 | `session.go` | Session token cache |
 | `fbcli_test.go` | Unit tests |

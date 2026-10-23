@@ -78,6 +78,17 @@ The runner performs a preflight login/list before starting, so missing credentia
 | `test-syncto.bash` | content sync, idempotent repeat sync, remote-only deletion, ignore patterns, alias |
 | `test-syncfrom.bash` | content sync, idempotent repeat sync, local-only deletion, remote updates, ignore patterns, alias |
 | `test-quantum-v2.bash` | source selection, special-character paths, `--` handling, upload-to-existing-file, validation |
+| `test-shell.bash` | sftp-style batch shell: pwd/cd, put/get, recursive transfers, zip, rename/rm, local commands, error exit |
+
+### Shell testing
+
+The shell is tested through stdin, so no pseudo-terminal is required:
+
+```bash
+printf 'pwd\nls -s /\ncd /tmp\nexit\n' | ./fbcli shell
+```
+
+`fbcli shell` still runs in batch mode when stdin is not a terminal. When run from a terminal, `fbcli` with no arguments starts the interactive shell. A batch command failure is reported and makes the process exit non-zero.
 
 ## Framework
 

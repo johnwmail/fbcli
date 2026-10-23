@@ -394,3 +394,87 @@ func TestMkdirRemoteDoesNotReplaceFiles(t *testing.T) {
 		t.Fatal("expected an error when a file exists at the directory path")
 	}
 }
+
+func TestSplitCommandLine(t *testing.T) {
+	args, err := splitCommandLine(`get "a b.txt" '/c d.txt' e\ f ""`)
+	if err != nil {
+		t.Fatalf("splitCommandLine returned an error: %v", err)
+	}
+	expected := []string{"get", "a b.txt", "/c d.txt", "e f", ""}
+	if len(args) != len(expected) {
+		t.Fatalf("args = %#v", args)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Errorf("args[%d] = %q, want %q", i, args[i], expected[i])
+		}
+	}
+
+	if _, err := splitCommandLine(`get "unterminated`); err == nil {
+		t.Fatal("expected an error for an unterminated quote")
+	}
+}
+
+func TestShellPathResolution(t *testing.T) {
+	shell := &Shell{
+		remoteCWD: "/docs",
+		localCWD:  filepath.Join(string(filepath.Separator), "tmp", "work"),
+	}
+	if got := shell.remotePath("a.txt"); got != "/docs/a.txt" {
+		t.Errorf("remotePath(a.txt) = %q", got)
+	}
+	if got := shell.remotePath("/other/a.txt"); got != "/other/a.txt" {
+		t.Errorf("remotePath(/other/a.txt) = %q", got)
+	}
+	if got := shell.remotePath(".."); got != "/" {
+		t.Errorf("remotePath(..) = %q", got)
+	}
+	if got := shell.localPath("a.txt"); got != filepath.Join(shell.localCWD, "a.txt") {
+		t.Errorf("localPath(a.txt) = %q", got)
+	}
+	if got := shell.localPath(filepath.Join(shell.localCWD, "a.txt")); got != filepath.Join(shell.localCWD, "a.txt") {
+		t.Errorf("localPath(absolute) = %q", got)
+	}
+}
+
+func TestParseShellOptions(t *testing.T) {
+	options, rest, err := parseShellOptions([]string{"-l", "-i", `\.log$`, "/docs"}, "li")
+	if err != nil {
+		t.Fatalf("parseShellOptions returned an error: %v", err)
+	}
+	if !options.long || options.ignore != `\.log$` {
+		t.Errorf("unexpected options: %+v", options)
+	}
+	if len(rest) != 1 || rest[0] != "/docs" {
+		t.Errorf("rest = %#v", rest)
+	}
+
+	if _, _, err := parseShellOptions([]string{"-z"}, "i"); err == nil {
+		t.Fatal("expected an error for an unsupported flag")
+	}
+}
+
+func TestShellCompletionHelpers(t *testing.T) {
+	if got := shellArgumentIndex([]string{"-r", "-i", "x", "a.txt"}); got != 1 {
+		t.Errorf("shellArgumentIndex = %d, want 1", got)
+	}
+	if got := completionKindFor("get", 0); got != completeRemote {
+		t.Errorf("get arg 0 kind = %v", got)
+	}
+	if got := completionKindFor("get", 1); got != completeLocal {
+		t.Errorf("get arg 1 kind = %v", got)
+	}
+	if got := completionKindFor("put", 0); got != completeLocal {
+		t.Errorf("put arg 0 kind = %v", got)
+	}
+	if got := completionKindFor("put", 1); got != completeRemote {
+		t.Errorf("put arg 1 kind = %v", got)
+	}
+}
+
+func TestShellPrompt(t *testing.T) {
+	shell := &Shell{remoteCWD: "/docs", client: &Client{Source: "srv"}}
+	if got := shell.prompt(); got != "fbcli[srv]:/docs> " {
+		t.Errorf("prompt = %q", got)
+	}
+}
