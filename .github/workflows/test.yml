@@ -125,7 +125,7 @@ jobs:
           FILEBROWSER_PASSWORD: testpass
           # Exercise explicit --source/FILEBROWSER_SOURCE without disabling auto-detection.
           FBCLI_TEST_SOURCE: srv
-        run: bash testsuite/run-tests.bash
+        run: bash testsuite/run-tests.bash -d
       - name: Show FileBrowser logs on failure
         if: failure()
         run: docker logs ${{ job.services.filebrowser.id }} || true

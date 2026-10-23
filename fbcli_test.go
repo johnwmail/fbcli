@@ -416,9 +416,11 @@ func TestSplitCommandLine(t *testing.T) {
 }
 
 func TestShellPathResolution(t *testing.T) {
+	localCWD := t.TempDir()
+	absoluteLocal := filepath.Join(t.TempDir(), "a.txt")
 	shell := &Shell{
 		remoteCWD: "/docs",
-		localCWD:  filepath.Join(string(filepath.Separator), "tmp", "work"),
+		localCWD:  localCWD,
 	}
 	if got := shell.remotePath("a.txt"); got != "/docs/a.txt" {
 		t.Errorf("remotePath(a.txt) = %q", got)
@@ -432,8 +434,8 @@ func TestShellPathResolution(t *testing.T) {
 	if got := shell.localPath("a.txt"); got != filepath.Join(shell.localCWD, "a.txt") {
 		t.Errorf("localPath(a.txt) = %q", got)
 	}
-	if got := shell.localPath(filepath.Join(shell.localCWD, "a.txt")); got != filepath.Join(shell.localCWD, "a.txt") {
-		t.Errorf("localPath(absolute) = %q", got)
+	if got := shell.localPath(absoluteLocal); got != absoluteLocal {
+		t.Errorf("localPath(absolute) = %q, want %q", got, absoluteLocal)
 	}
 }
 
