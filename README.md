@@ -7,7 +7,7 @@ This release is a full migration to the **FileBrowser Quantum v2 API** and targe
 > [!IMPORTANT]
 > The legacy `filebrowser/filebrowser` v1 API is **not supported**. `fbcli` now uses `/api/auth/login`, `/api/resources?path=...&source=...`, and `/api/settings/sources`.
 
-[![Go Version](https://img.shields.io/badge/Go-1.24.4-blue.svg)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.27%2B-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 
 ## Features

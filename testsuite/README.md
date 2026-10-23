@@ -6,7 +6,7 @@ The migration target is `ghcr.io/gtsteffaniak/filebrowser:stable` (currently v2.
 
 ## Requirements
 
-- Go 1.24+ and a built `./fbcli` binary
+- Go 1.27+ and a built `./fbcli` binary
 - Bash 4+
 - A reachable FileBrowser Quantum v2 server
 - An account with view, download, create, modify, and delete permissions on one source
