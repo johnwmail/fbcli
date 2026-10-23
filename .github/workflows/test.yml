@@ -162,6 +162,6 @@ jobs:
           go build -trimpath -v -ldflags="$VERSION_VAR" -o fbcli.exe
           ./fbcli.exe show
           $version = ./fbcli.exe --version | Out-String
-          if ($version -notmatch 'fbcli version') { throw "unexpected --version output: $version" }
+          if ($version -notmatch '(?i)fbcli(\.exe)? version') { throw "unexpected --version output: $version" }
           $help = ./fbcli.exe --help | Out-String
           if ($help -notmatch 'FILEBROWSER_SOURCE') { throw "help does not document FILEBROWSER_SOURCE" }

@@ -309,11 +309,16 @@ assert_content() {
     local expected="$3"
     TEST_COUNT=$((TEST_COUNT + 1))
 
+    local read_path="$file_path"
+    case "$read_path" in
+        -*) read_path="./$read_path" ;;
+    esac
+
     local actual=""
-    if [ -f "$file_path" ]; then
-        actual="$(cat "$file_path")"
+    if [ -f "$read_path" ]; then
+        actual="$(cat "$read_path")"
     fi
-    if [ -f "$file_path" ] && [ "$actual" = "$expected" ]; then
+    if [ -f "$read_path" ] && [ "$actual" = "$expected" ]; then
         PASS_COUNT=$((PASS_COUNT + 1))
         echo -e "  ${GREEN}✓${NC} $description"
         return 0
@@ -386,9 +391,15 @@ track_remote() {
 create_test_file() {
     local file_path="$1"
     local content="${2:-test content $(date)}"
+    local write_path="$file_path"
 
-    mkdir -p "$(dirname "$file_path")"
-    printf '%s\n' "$content" > "$file_path"
+    # dirname/mkdir would treat a leading dash as an option.
+    case "$write_path" in
+        -*) write_path="./$write_path" ;;
+    esac
+
+    mkdir -p "$(dirname "$write_path")"
+    printf '%s\n' "$content" > "$write_path"
     track_local "$file_path"
 }
 
@@ -396,8 +407,13 @@ create_test_file() {
 create_test_dir() {
     local dir_path="$1"
     local num_files="${2:-3}"
+    local write_path="$dir_path"
 
-    mkdir -p "$dir_path"
+    case "$write_path" in
+        -*) write_path="./$write_path" ;;
+    esac
+
+    mkdir -p "$write_path"
     track_local "$dir_path"
 
     local i
@@ -425,7 +441,11 @@ cleanup_all_resources() {
     local local_path
     for local_path in "${CREATED_LOCAL_PATHS[@]}"; do
         if [ -e "$local_path" ]; then
-            rm -rf "$local_path" 2>/dev/null || failed=true
+            local remove_path="$local_path"
+            case "$remove_path" in
+                -*) remove_path="./$remove_path" ;;
+            esac
+            rm -rf "$remove_path" 2>/dev/null || failed=true
         fi
     done
 
