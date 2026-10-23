@@ -26,14 +26,31 @@ track_remote "$REMOTE_DIR"
 step "Testing single file download"
 DOWNLOAD_FILE="downloaded-file-$TEST_ID.txt"
 assert "Download single file" ./fbcli download "$REMOTE_DIR/$LOCAL_SETUP_DIR/download-me.txt" "$DOWNLOAD_FILE"
-assert_exists "File downloaded successfully" "$DOWNLOAD_FILE"
 track_local "$DOWNLOAD_FILE"
+assert_exists "File downloaded successfully" "$DOWNLOAD_FILE"
+assert_content "Downloaded content matches" "$DOWNLOAD_FILE" "download this file"
 
 step "Testing directory download"
 DOWNLOAD_DIR="downloaded-dir-$TEST_ID"
 assert "Download directory" ./fbcli download "$REMOTE_DIR/$LOCAL_SETUP_DIR" "$DOWNLOAD_DIR.zip"
-assert_exists "Directory downloaded as zip" "$DOWNLOAD_DIR.zip"
 track_local "$DOWNLOAD_DIR.zip"
+assert_exists "Directory downloaded as zip" "$DOWNLOAD_DIR.zip"
+assert "Directory zip is not empty" test -s "$DOWNLOAD_DIR.zip"
+
+step "Testing directory download with -z"
+DOWNLOAD_FLAG="downloaded-flag-$TEST_ID.zip"
+assert "Download with -z" ./fbcli download -z "$REMOTE_DIR/$LOCAL_SETUP_DIR" "$DOWNLOAD_FLAG"
+track_local "$DOWNLOAD_FLAG"
+assert_exists "Zip flag produced an archive" "$DOWNLOAD_FLAG"
+assert "Zip flag archive is not empty" test -s "$DOWNLOAD_FLAG"
+
+step "Testing download into an existing local directory"
+EXISTING_DIR="downloaded-existing-$TEST_ID"
+mkdir -p "$EXISTING_DIR"
+track_local "$EXISTING_DIR"
+assert "Download into existing directory" ./fbcli download "$REMOTE_DIR/$LOCAL_SETUP_DIR/another.txt" "$EXISTING_DIR"
+assert_exists "File placed inside existing directory" "$EXISTING_DIR/another.txt"
+assert_content "Existing-directory content matches" "$EXISTING_DIR/another.txt" "another file"
 
 step "Testing download with ignore option"
 LOCAL_SETUP_DIR2="setup-download-ignore-$TEST_ID"
@@ -49,8 +66,14 @@ track_remote "$REMOTE_DIR2"
 
 DOWNLOAD_IGNORE_DIR="downloaded-ignore-$TEST_ID"
 assert "Download with ignore pattern" ./fbcli download -i ".*\\.log$" "$REMOTE_DIR2/$LOCAL_SETUP_DIR2" "$DOWNLOAD_IGNORE_DIR.zip"
-assert_exists "Ignored download completed" "$DOWNLOAD_IGNORE_DIR.zip"
 track_local "$DOWNLOAD_IGNORE_DIR.zip"
+assert_exists "Ignored download completed" "$DOWNLOAD_IGNORE_DIR.zip"
+assert_exists "Included file downloaded" "$DOWNLOAD_IGNORE_DIR.zip/include.txt"
+assert_not_exists "Ignored file not downloaded" "$DOWNLOAD_IGNORE_DIR.zip/ignore.log"
+assert_content "Ignored download content matches" "$DOWNLOAD_IGNORE_DIR.zip/include.txt" "include this"
+
+step "Testing incompatible flags"
+assert_fails "-z and -i cannot be combined" ./fbcli download -z -i ".*\\.log$" "$REMOTE_DIR2/$LOCAL_SETUP_DIR2" "conflict-$TEST_ID"
 
 step "Testing error handling"
 assert_fails "Download fails on non-existent file" ./fbcli download "/non-existent-file-$TEST_ID.txt" "fail-download.txt"
@@ -59,13 +82,15 @@ step "Testing command aliases"
 # Test down alias
 DOWN_FILE="down-alias-$TEST_ID.txt"
 assert "down alias works" ./fbcli down "$REMOTE_DIR/$LOCAL_SETUP_DIR/another.txt" "$DOWN_FILE"
-assert_exists "File downloaded with down alias" "$DOWN_FILE"
 track_local "$DOWN_FILE"
+assert_exists "File downloaded with down alias" "$DOWN_FILE"
+assert_content "down alias content matches" "$DOWN_FILE" "another file"
 
-# Test dl alias  
+# Test dl alias
 DL_FILE="dl-alias-$TEST_ID.txt"
 assert "dl alias works" ./fbcli dl "$REMOTE_DIR/$LOCAL_SETUP_DIR/another.txt" "$DL_FILE"
-assert_exists "File downloaded with dl alias" "$DL_FILE"
 track_local "$DL_FILE"
+assert_exists "File downloaded with dl alias" "$DL_FILE"
+assert_content "dl alias content matches" "$DL_FILE" "another file"
 
 finish_test

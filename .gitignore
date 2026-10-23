@@ -22,6 +22,9 @@ go.work.sum
 # Project binary
 fbcli
 
+# Atomic download temporary files
+.fbcli-download-*
+
 *.zip
 test/
 upload/

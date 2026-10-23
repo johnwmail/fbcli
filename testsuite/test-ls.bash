@@ -45,12 +45,23 @@ assert_contains "ls -l shows size column" "Size" ./fbcli ls -l "$REMOTE_DIR"
 step "Testing ls -s (script format)"
 assert "ls -s works" ./fbcli ls -s "$REMOTE_DIR"
 assert_contains "ls -s shows file1.txt" "file1.txt" ./fbcli ls -s "$REMOTE_DIR"
+assert_not_contains "ls -s has no ANSI escapes" $'\033' ./fbcli ls -s "$REMOTE_DIR"
 
 # Verify script format is one file per line
 output=$(./fbcli ls -s "$REMOTE_DIR")
 line_count=$(echo "$output" | wc -l)
 file_count=$(echo "$output" | grep -c -E "\.(txt|log|md)$")
 assert "ls -s produces one file per line" test "$line_count" -eq "$file_count"
+
+step "Testing listing a single file"
+assert "ls -s accepts a file path" ./fbcli ls -s "$REMOTE_DIR/file1.txt"
+assert_contains "ls -s shows the file name" "file1.txt" ./fbcli ls -s "$REMOTE_DIR/file1.txt"
+assert_contains "ls -l shows the file name" "file1.txt" ./fbcli ls -l "$REMOTE_DIR/file1.txt"
+assert_contains "ls -l shows a size for a file" "Size" ./fbcli ls -l "$REMOTE_DIR/file1.txt"
+
+step "Testing trailing slashes and path normalization"
+assert "ls accepts a trailing slash" ./fbcli ls -s "$REMOTE_DIR/"
+assert_contains "trailing slash lists the contents" "file2.txt" ./fbcli ls -s "$REMOTE_DIR/"
 
 step "Testing ignore functionality with regex patterns"
 

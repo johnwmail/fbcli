@@ -5,21 +5,27 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
-    name: Lint and Format
+    name: Lint and Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '>=1.24'
+          go-version-file: go.mod
           cache: true
       - name: Download Go modules
         run: go mod download -x
@@ -31,11 +37,20 @@ jobs:
             echo "$UNFORMATTED"
             exit 1
           fi
+      - name: Run go vet
+        run: go vet ./...
+      - name: Run unit tests
+        run: go test -race ./...
+      - name: Validate test scripts
+        run: |
+          for file in testsuite/*.bash; do
+            bash -n "$file"
+          done
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
-      - name: Tidy
+      - name: Check module tidiness
         run: |
           go mod tidy
           if [[ -n $(git status -s) ]]; then
@@ -48,40 +63,49 @@ jobs:
     name: Integration Test (Linux/${{ matrix.arch }})
     runs-on: ubuntu-latest
     needs: lint
+    timeout-minutes: 30
     strategy:
       matrix:
         arch: [amd64, arm64]
-        go: [1.24.x]
     services:
       filebrowser:
-        image: filebrowser/filebrowser
+        image: ghcr.io/gtsteffaniak/filebrowser:stable
         ports:
           - 8080:80
+        env:
+          FILEBROWSER_ADMIN_PASSWORD: testpass
+        options: --user root
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up QEMU
         if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: go.mod
           cache: true
       - name: Download Go modules
         run: go mod download -x
-      - name: Wait for filebrowser to be ready
+      - name: Wait for FileBrowser Quantum to be ready
         run: |
-          echo "Waiting for filebrowser service to start..."
-          until curl -s -o /dev/null http://localhost:8080/health; do
+          echo "Waiting for FileBrowser Quantum service to start..."
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:8080/health; then
+              echo "FileBrowser is up!"
+              exit 0
+            fi
             echo -n .
-            sleep 1
+            sleep 2
           done
-          echo "Filebrowser is up!"
-      - name: Capture filebrowser password
-        id: fblog
+          echo
+          echo "FileBrowser did not become healthy in time." >&2
+          exit 1
+      - name: Verify server is Quantum v2
         run: |
-          docker logs ${{ job.services.filebrowser.id }} 2>&1 | awk '/password:/{print "fbpass="$NF}' >> $GITHUB_OUTPUT
+          docker exec ${{ job.services.filebrowser.id }} /home/filebrowser/filebrowser version | tee /tmp/filebrowser-version.txt
+          grep -q "v2\\." /tmp/filebrowser-version.txt
       - name: Build fbcli
         env:
           CGO_ENABLED: 0
@@ -93,42 +117,51 @@ jobs:
           else
             VERSION_VAR="-X main.version=dev-$(echo ${{ github.sha }} | cut -c1-7)"
           fi
-          go build -v -ldflags="$VERSION_VAR" -o fbcli
+          go build -trimpath -v -ldflags="$VERSION_VAR" -o fbcli
       - name: Run Integration Tests
         env:
           FILEBROWSER_URL: http://localhost:8080
           FILEBROWSER_USERNAME: admin
-          FILEBROWSER_PASSWORD: ${{ steps.fblog.outputs.fbpass }}
+          FILEBROWSER_PASSWORD: testpass
+          # Exercise explicit --source/FILEBROWSER_SOURCE without disabling auto-detection.
+          FBCLI_TEST_SOURCE: srv
         run: bash testsuite/run-tests.bash
+      - name: Show FileBrowser logs on failure
+        if: failure()
+        run: docker logs ${{ job.services.filebrowser.id }} || true
 
   test-smoke:
     name: Smoke Test (Windows/amd64)
     runs-on: windows-latest
     needs: lint
+    timeout-minutes: 15
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '>=1.24'
+          go-version-file: go.mod
           cache: true
       - name: Download Go modules
         run: go mod download -x
-      - name: Build and Smoke Test
+      - name: Run unit tests
+        run: go test ./...
+      - name: Build and smoke test
         env:
           CGO_ENABLED: 0
-          FILEBROWSER_URL: http://localhost:8080
-          FILEBROWSER_USERNAME: admin
-          FILEBROWSER_PASSWORD: password
+          FILEBROWSER_URL: http://127.0.0.1:1
+          FILEBROWSER_USERNAME: smoke-user
+          FILEBROWSER_PASSWORD: smoke-password
         shell: pwsh
         run: |
-          $VERSION_VAR = ""
+          $VERSION_VAR = "-X main.version=dev-$($env:GITHUB_SHA.Substring(0,7))"
           if ($env:GITHUB_REF_TYPE -eq "tag") {
             $VERSION_VAR = "-X main.version=$env:GITHUB_REF_NAME"
-          } else {
-            $sha = $env:GITHUB_SHA.Substring(0,7)
-            $VERSION_VAR = "-X main.version=dev-$sha"
           }
-          go build -v -ldflags="$VERSION_VAR" -o fbcli.exe
+          go build -trimpath -v -ldflags="$VERSION_VAR" -o fbcli.exe
           ./fbcli.exe show
+          $version = ./fbcli.exe --version | Out-String
+          if ($version -notmatch 'fbcli version') { throw "unexpected --version output: $version" }
+          $help = ./fbcli.exe --help | Out-String
+          if ($help -notmatch 'FILEBROWSER_SOURCE') { throw "help does not document FILEBROWSER_SOURCE" }

@@ -29,6 +29,16 @@ assert_remote_exists "Original file exists" "$OLD_FILE"
 assert "rename command works" ./fbcli rename "$OLD_FILE" "$NEW_FILE"
 assert_remote_not_exists "Original file moved" "$OLD_FILE"
 assert_remote_exists "File renamed successfully" "$NEW_FILE"
+assert_remote_content "Renamed file content preserved" "$NEW_FILE" "original file content"
+
+step "Testing move to another remote directory"
+MOVE_DIR="$REMOTE_DIR/moved-into-$TEST_ID"
+assert "Create move destination" ./fbcli mkdir "$MOVE_DIR"
+MOVE_TARGET="$MOVE_DIR/moved.txt"
+assert "Move file into another directory" ./fbcli mv "$NEW_FILE" "$MOVE_TARGET"
+assert_remote_not_exists "Moved file left the old directory" "$NEW_FILE"
+assert_remote_exists "Moved file exists in the new directory" "$MOVE_TARGET"
+assert_remote_content "Moved file content preserved" "$MOVE_TARGET" "original file content"
 
 step "Testing file rename with mv alias"
 OLD_FILE2="$REMOTE_DIR/$LOCAL_SETUP_DIR/subdir/nested.txt"
@@ -37,6 +47,7 @@ assert_remote_exists "Nested file exists" "$OLD_FILE2"
 assert "mv alias works" ./fbcli mv "$OLD_FILE2" "$NEW_FILE2"
 assert_remote_not_exists "Original nested file moved" "$OLD_FILE2"
 assert_remote_exists "Nested file renamed" "$NEW_FILE2"
+assert_remote_content "Nested file content preserved" "$NEW_FILE2" "nested file"
 
 step "Testing directory rename"
 # Create another test setup for directory rename
@@ -54,9 +65,11 @@ assert "rename directory works" ./fbcli rename "$OLD_DIR" "$NEW_DIR"
 assert_remote_not_exists "Original directory moved" "$OLD_DIR"
 assert_remote_exists "Directory renamed successfully" "$NEW_DIR"
 assert_remote_exists "Directory content preserved" "$NEW_DIR/content.txt"
+assert_remote_content "Directory content is intact" "$NEW_DIR/content.txt" "directory content"
 
 step "Testing error handling"
 assert_fails "rename fails on non-existent file" ./fbcli rename "/non-existent-$TEST_ID.txt" "/also-non-existent-$TEST_ID.txt"
 assert_fails "mv fails on non-existent file" ./fbcli mv "/non-existent-$TEST_ID.txt" "/also-non-existent-$TEST_ID.txt"
+assert_fails "rename fails when the destination parent is missing" ./fbcli rename "$MOVE_TARGET" "/test-missing-parent-$TEST_ID/file.txt"
 
 finish_test

@@ -1,339 +1,390 @@
-# fbcli - FileBrowser Command Line Interface
+# fbcli - FileBrowser Quantum CLI
 
-A powerful command-line client for [FileBrowser](https://filebrowser.org), enabling efficient file management operations on remote FileBrowser instances from your terminal.
+A command-line client for [FileBrowser Quantum](https://github.com/gtsteffaniak/filebrowser), the multi-source FileBrowser v2 server. Manage remote files, transfer directories, and keep folders in sync from the terminal.
+
+This release is a full migration to the **FileBrowser Quantum v2 API** and targets `ghcr.io/gtsteffaniak/filebrowser:stable` (**v2.0.1-stable**).
+
+> [!IMPORTANT]
+> The legacy `filebrowser/filebrowser` v1 API is **not supported**. `fbcli` now uses `/api/auth/login`, `/api/resources?path=...&source=...`, and `/api/settings/sources`.
 
 [![Go Version](https://img.shields.io/badge/Go-1.24.4-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](#license)
 
-## 🚀 Features
+## Features
 
-- **Complete File Operations**: Upload, download, list, create, delete, rename files and directories
-- **Advanced Listing**: Multiple listing modes including detailed view and script-friendly output
-- **Sync Capabilities**: Bidirectional sync between local and remote directories
-- **Pattern Filtering**: Regex-based ignore patterns for selective operations
-- **Comprehensive Aliases**: Multiple command aliases for improved usability
-- **Zip Downloads**: Automatic zip compression for directory downloads
-- **Interactive Configuration**: Secure credential input with hidden password entry
-- **Clean Test Suite**: 100% test coverage with automated cleanup
+- Full file operations: list, upload, download, mkdir, delete, rename/move
+- Multi-source support with automatic source discovery
+- Directory downloads as server-side zip archives
+- Regex ignore patterns for uploads, downloads, deletes, and syncs
+- Bidirectional sync (`syncto` / `syncfrom`) with exact-size comparison and SHA-256 checks for small files
+- Secure password prompt, TOTP support, and short-lived session token caching
+- Script-friendly listing output (`ls -s`)
+- Exact handling of spaces, unicode, and URL-special characters in remote paths
 
-## 📦 Installation
+## Compatibility
 
-### Pre-built Binaries
-Download the latest release from the [releases page](https://github.com/johnwmail/fbcli/releases).
+| Component | Supported |
+|-----------|-----------|
+| Server | FileBrowser Quantum v2.0.1-stable (`:stable`); newer v2.x releases should work |
+| Legacy FileBrowser v1 | No |
+| Linux | amd64, arm64 |
+| Windows | amd64 |
+| macOS | Build from source |
 
-### Build from Source
+The integration workflow runs against the same `:stable` container image used in deployment.
+
+## Installation
+
+### Pre-built binaries
+
+Download a release from the [releases page](https://github.com/johnwmail/fbcli/releases).
+
+### Build from source
+
 ```bash
 git clone https://github.com/johnwmail/fbcli.git
 cd fbcli
-go build -o fbcli
+go build -o fbcli .
 ```
 
-### Using Go Install
+### Go install
+
 ```bash
 go install github.com/johnwmail/fbcli@latest
 ```
 
-## ⚙️ Configuration
+## Configuration
 
-fbcli requires three environment variables to connect to your FileBrowser instance:
+`fbcli` reads connection settings from environment variables. Missing values are requested interactively (except during `show`).
 
 ```bash
-export FILEBROWSER_URL="https://your-filebrowser-instance.com"
-export FILEBROWSER_USERNAME="your-username"
+export FILEBROWSER_URL="https://files.example.com"
+export FILEBROWSER_USERNAME="alice"
 export FILEBROWSER_PASSWORD="your-password"
+
+# Optional: choose a source when the account can access several.
+export FILEBROWSER_SOURCE="media"
+
+# Optional: TOTP code when two-factor authentication is enabled.
+export FILEBROWSER_TOTP="123456"
 ```
 
-Alternatively, fbcli will prompt for missing credentials interactively.
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `FILEBROWSER_URL` | Server URL, including any base path | Yes |
+| `FILEBROWSER_USERNAME` | Login username | Yes |
+| `FILEBROWSER_PASSWORD` | Login password | Yes |
+| `FILEBROWSER_SOURCE` | Source name to use | No* |
+| `FILEBROWSER_TOTP` | Current TOTP code | No |
 
-## 📋 Commands
+\* If omitted, `fbcli` calls `/api/settings/sources`. A single accessible source is used automatically. With multiple sources the first name alphabetically is used and a note is printed to stderr. Use `--source` or `FILEBROWSER_SOURCE` to choose explicitly.
 
-### File Listing
+`FILEBROWSER_URL` may include a base path, for example `https://example.com/files`; endpoints are appended as `/files/api/...`.
 
-#### `ls [-i ignore] [-l] [-s] [remote_path]`
-List files and directories with multiple output formats.
+### Source permissions
 
-**Flags:**
-- `-l`: Detailed view with file sizes, dates, and permissions
-- `-s`: Script-friendly output (one file per line, no colors)
-- `-i <regex>`: Ignore files/directories matching the regex pattern
+The account needs the relevant per-source permissions:
 
-**Aliases:** `list`, `dir` (default to detailed view)
+- `view` for `ls` and sync planning
+- `download` for `download` and syncfrom
+- `create` for `upload` and `mkdir`
+- `modify` for `rename`/`mv`
+- `delete` for `rm`/`delete`
 
-**Examples:**
+A read-only source rejects all write operations with HTTP 403. If the account has no sources, `fbcli` exits with an explanatory error.
+
+### Session token cache
+
+Successful logins are cached in the user cache directory (for example `~/.cache/fbcli/sessions.json` on Linux, `~/Library/Caches/fbcli/sessions.json` on macOS, and `%LocalAppData%\fbcli\sessions.json` on Windows; mode `0600`). This prevents a new login for every command and avoids the server's login rate limiter during loops and scripts. Passwords are never stored.
+
+To force a fresh login, delete the cache file or the `fbcli` cache directory. Set `XDG_CACHE_HOME` to relocate it on Linux.
+
+The login endpoint is rate limited per IP and username. If a login is rate limited, `fbcli` waits briefly and retries once; longer waits are reported to the caller.
+
+## Commands
+
+### Listing
+
+#### `ls [-i <regex>] [-l] [-s] [remote_path]`
+
 ```bash
-# Basic listing
-fbcli ls /
-
-# Detailed listing with sizes and dates
-fbcli ls -l /documents
-
-# Script-friendly output for automation
-fbcli ls -s /logs
-
-# Ignore log files
-fbcli ls -i ".*\\.log$" /var
-
-# Combined flags
-fbcli ls -l -i "temp.*" /workspace
+fbcli ls /                       # compact multi-column listing
+fbcli ls -l /documents           # modified time and index size
+fbcli ls -s /logs                # one name per line (scripts)
+fbcli ls -i '.*\.log$' /var      # skip log files
+fbcli ls -s /docs/report.pdf     # list a single file
 ```
 
-### File Transfer
+Aliases: `list`, `dir` (both default to the detailed format).
 
-#### `upload, up [-i ignore] <local_path> [remote_dir]`
-Upload files or directories to the remote server.
+`-l` shows the size reported by the server index. For files this can be disk usage rather than exact byte length (for example 4 KiB for a 6-byte file). Synchronization uses the download endpoint's `Content-Length` for exact comparisons.
 
-**Examples:**
+### Transfers
+
+#### `upload, up [-i <regex>] <local_path> [remote_dir]`
+
 ```bash
-# Upload file to root
-fbcli upload document.pdf
-
-# Upload to specific directory
-fbcli upload project.zip /uploads
-
-# Upload directory, ignoring .git folders
-fbcli up -i "\\.git" ./my-project /projects
+fbcli upload report.pdf /documents
+fbcli up -i '\.git' ./project /projects
+fbcli upload new.txt /docs/old.txt   # overwrite an existing remote file
 ```
 
-#### `download, down, dl [-i ignore] [-z] <remote_path> [local_path]`
-Download files or directories from the remote server.
+- If the destination exists as a **file**, it is treated as the target file path.
+- Otherwise the destination is treated as a directory and the local base name is preserved.
+- Missing remote parent directories are created automatically.
+- A directory upload preserves empty directories.
+- Files matching `-i` are skipped; matching directories and their subtrees are skipped.
 
-**Flags:**
-- `-z`: Force zip compression for directories
-- `-i <regex>`: Ignore files matching pattern
+#### `download, down, dl [-i <regex>] [-z] <remote_path> [local_path]`
 
-**Examples:**
 ```bash
-# Download file
 fbcli download /documents/report.pdf
-
-# Download directory as zip
-fbcli download -z /projects/webapp
-
-# Download with ignore pattern
-fbcli dl -i "node_modules" /source/project ./local-copy
+fbcli download -z /projects/webapp          # save webapp.zip
+mkdir -p ./backup && fbcli download /projects/webapp ./backup
+fbcli dl -i 'node_modules' /src ./copy      # recursive download, skipping matches
 ```
 
-### Directory Operations
+- Files are downloaded to `local_path`; if `local_path` is an existing directory, the remote base name is used inside it.
+- Directories are downloaded as a zip archive by default. The archive contains the remote directory as its top-level entry.
+- `-z` explicitly requests the zip path; it cannot be combined with `-i`.
+- With `-i`, `fbcli` walks the tree and downloads files individually so ignored entries can be skipped. The target is a local directory.
+
+### Directory operations
 
 #### `mkdir, md <remote_path>...`
-Create one or more directories.
+
+Creates one or more directories, including parents. Creating an existing directory succeeds. The source root cannot be created or replaced.
 
 ```bash
-# Create single directory
 fbcli mkdir /new-folder
-
-# Create multiple directories
 fbcli md /dir1 /dir2 /dir3
 ```
 
-#### `rm, delete [-i ignore] <remote_path>...`
-Delete files or directories.
+#### `rm, delete [-i <regex>] <remote_path>...`
 
 ```bash
-# Delete single file
 fbcli rm /old-file.txt
-
-# Delete multiple items
 fbcli delete /tmp/file1 /tmp/file2
-
-# Delete with ignore pattern (delete all .log files except error.log)
-fbcli rm -i "error\\.log" /logs/*.log
+fbcli rm -i 'error\.log' /logs        # remove everything except error.log
 ```
 
+Directories are deleted recursively. `fbcli` refuses to delete the source root. With `-i`, matching entries are preserved; a directory is also removed when nothing inside it was preserved.
+
 #### `rename, mv <old_path> <new_path>`
-Rename or move files and directories.
 
 ```bash
-# Rename file
 fbcli rename /old-name.txt /new-name.txt
-
-# Move file to different directory
 fbcli mv /temp/file.txt /documents/file.txt
 ```
 
+Moves and renames use the v2 JSON PATCH API. The destination parent directory must already exist.
+
 ### Synchronization
 
-#### `syncto, to [-i ignore] <local_path> <remote_path>`
-Synchronize local directory to remote location.
+#### `syncto, to [-i <regex>] <local_path> <remote_path>`
+
+Makes the remote directory mirror the local directory:
+
+- New and changed local files are uploaded.
+- Remote entries not present locally are deleted.
+- Ignored names are left untouched on both sides.
+- Files are compared by exact byte size from the download endpoint; files smaller than 1 MiB are additionally verified with SHA-256.
+- A second run over unchanged files reports `already in sync`.
 
 ```bash
-# Basic sync
 fbcli syncto ./local-folder /remote-backup
-
-# Sync with ignore pattern
-fbcli to -i "\\.(git|DS_Store)" ./project /projects/my-app
+fbcli to -i '\.(git|DS_Store)' ./project /projects/my-app
 ```
 
-#### `syncfrom, from [-i ignore] <remote_path> <local_path>`
-Synchronize remote directory to local location.
+#### `syncfrom, from [-i <regex>] <remote_path> <local_path>`
+
+Makes the local directory mirror the remote directory. It performs the same comparison and deletion rules in the opposite direction.
 
 ```bash
-# Sync from remote
 fbcli syncfrom /server-configs ./local-backup
-
-# Sync ignoring temporary files
-fbcli from -i "temp.*" /workspace ./local-workspace
+fbcli from -i '^temp' /workspace ./local-workspace
 ```
+
+Sync is intentionally one-way and destructive by default: extra entries on the destination side are deleted. Use `-i` for anything that must be preserved.
 
 ### Configuration
 
 #### `show`
-Display current configuration and version information.
+
+Displays the configured URL, username, source, redacted password, and version. `show` does not contact the server and therefore prints `(auto)` when no source is configured.
 
 ```bash
 fbcli show
+fbcli show --source media
 ```
 
-## 🔍 Advanced Features
+## Global options
 
-### Regex Ignore Patterns
+| Option | Description |
+|--------|-------------|
+| `-i, --ignore <regex>` | Skip names matching a Go regular expression |
+| `-S, --source <name>` | Override `FILEBROWSER_SOURCE` for this command |
+| `-z, --zip` | Download a directory as a zip archive |
+| `-s, --script` | Print plain names, one per line |
+| `-l, --long` | Detailed listing format |
+| `--` | Treat all following arguments as paths |
+| `-h, --help` | Show help |
+| `-v, --version` | Show version |
 
-All commands support powerful regex-based ignore patterns with the `-i` flag:
+Options may appear before or after positional paths. Use `--` when a path starts with `-`.
+
+## Ignore patterns
+
+`-i` accepts any Go regular expression and matches the **base name** of each file or directory.
 
 ```bash
-# Ignore all log files
--i ".*\\.log$"
-
-# Ignore temporary files and directories
--i "(temp|tmp|cache)"
-
-# Ignore version control directories
--i "\\.(git|svn|hg)"
-
-# Ignore multiple file types
--i "\\.(log|tmp|cache|bak)$"
-
-# Ignore directories starting with dot
--i "^\\..*"
+-i '.*\.log$'              # log files
+-i '(temp|tmp|cache)'      # temporary names
+-i '\.(git|svn|hg)'        # VCS directories
+-i '^\.'                   # dotfiles
 ```
 
-### Script-Friendly Output
+## Scripting
 
-Use the `-s` flag with `ls` for automation and scripting:
+Use `-s` for one name per line without colors:
 
 ```bash
-# Process each file in a loop
-fbcli ls -s /data | while read filename; do
-    echo "Processing $filename"
-    fbcli download "/data/$filename" "./processed/"
+fbcli ls -s /data | while read -r name; do
+    fbcli download "/data/$name" ./downloads/
 done
 ```
 
-### Zip Download Optimization
+Exit codes:
 
-Directories are automatically downloaded as zip files for efficiency:
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Usage error, authentication failure, network error, or API error |
+
+Server failures are printed as `HTTP <status>: <message>`. Common statuses:
+
+- `401` — missing, expired, or revoked credentials
+- `403` — source permission denied or read-only source
+- `404` — path or source not found
+- `409` — resource already exists where the operation requires a new path
+- `429` — login or request rate limit
+
+## Troubleshooting
+
+### `source "..." not found`
+
+The account cannot access that source name, or it was typed incorrectly. Run `fbcli ls /` with no `FILEBROWSER_SOURCE` to let the CLI auto-detect, or ask an administrator which source names the account can access.
+
+### `the account has no accessible sources`
+
+The user exists but has no backend scopes. Grant source access in the Quantum admin UI.
+
+### Login returns `401`
+
+Check the username/password and TOTP code. Delete the session cache to rule out a stale token:
 
 ```bash
-# Downloads as project.zip
-fbcli download /large-project
-
-# Force zip even for single files
-fbcli download -z /single-file.txt
+rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/fbcli/sessions.json"
 ```
 
-## 🧪 Testing
+### Login returns `429`
 
-fbcli includes a comprehensive test suite with 100% cleanup:
+The server rate-limits credential attempts. Reuse the session cache, wait for the `Retry-After` period, and avoid parallel batches of `fbcli` commands that each need a fresh login.
+
+### Upload returns `403`
+
+The account lacks `create`/`modify` permission for that source, or the source is read-only.
+
+### Download returns `403`
+
+The account lacks `download` permission for the source, or the source is not readable by the account.
+
+### `ls -l` size looks wrong
+
+The v2 index reports disk usage for files. Use synchronization (which uses exact `Content-Length`) or download the file when exact byte size matters.
+
+## Migrating from the legacy FileBrowser API
+
+| Legacy (v1) | FileBrowser Quantum (v2) |
+|-------------|--------------------------|
+| `POST /api/login` with JSON body | `POST /api/auth/login?username=...` with `X-Password` header |
+| `/api/resources/<path>` | `/api/resources?path=<path>&source=<name>` |
+| `/api/raw/<path>` | `/api/resources/download?source=<name>&file=<path>` |
+| `POST /api/resources/<path>/` (mkdir) | `POST /api/resources?path=...&source=...&isDir=true` |
+| Query-string rename (`PATCH ...?action=rename`) | JSON PATCH body with `items`, `action`, `overwrite`, `rename` |
+| Single implicit source | Multiple named sources (`/api/settings/sources`) |
+| Public share paths under `/api/public` | Public share API under `/public/api` |
+
+### Migration checklist
+
+1. Upgrade the server to FileBrowser Quantum v2.0.1-stable or newer.
+2. Point `FILEBROWSER_URL` at the new server, including any base path.
+3. Set `FILEBROWSER_SOURCE` if the account can access more than one source.
+4. Verify permissions for the source (`view`, `download`, `create`, `modify`, `delete`).
+5. Run `fbcli show`, then `fbcli ls -s /`.
+6. Run the integration suite against the deployment: `./testsuite/run-tests.bash`.
+7. Update scripts that hard-coded the old `/api/login`, `/api/raw`, or path-in-URL endpoints.
+
+## Project layout
+
+| File | Responsibility |
+|------|----------------|
+| `fbcli.go` | CLI entry point, options, prompts, `show`, help |
+| `client.go` | HTTP client, auth, source discovery, API errors |
+| `resource.go` | List, upload, download, mkdir, delete, rename |
+| `sync.go` | One-way synchronization |
+| `output.go` | Listing formats, colors, hashing helpers |
+| `session.go` | Session token cache |
+| `fbcli_test.go` | Unit tests |
+| `testsuite/` | Real-server integration tests |
+
+## Testing
+
+### Unit tests
 
 ```bash
-# Run all tests
-./testsuite/run-tests.bash
-
-# Run specific test
-./testsuite/test-upload.bash
-
-# Run with verbose output
-./testsuite/test-ls.bash
-```
-
-The test suite includes:
-- Upload/download operations
-- Directory synchronization
-- Pattern matching and ignore functionality
-- Command aliases verification
-- Error handling scenarios
-- Resource cleanup validation
-
-## 🔧 Development
-
-### Building
-
-```bash
-# Build for current platform
-go build -o fbcli
-
-# Build for multiple platforms
-GOOS=linux GOARCH=amd64 go build -o fbcli-linux-amd64
-GOOS=windows GOARCH=amd64 go build -o fbcli-windows-amd64.exe
-GOOS=darwin GOARCH=amd64 go build -o fbcli-darwin-amd64
-```
-
-### Code Quality
-
-```bash
-# Format code
-go fmt ./...
-
-# Run linter
-golangci-lint run
-
-# Run tests
 go test ./...
+go vet ./...
+golangci-lint run
 ```
 
-## 📚 API Reference
+### Integration tests
 
-### Environment Variables
+```bash
+go build -o fbcli .
+export FILEBROWSER_URL=http://localhost:8080
+export FILEBROWSER_USERNAME=admin
+export FILEBROWSER_PASSWORD=testpass
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `FILEBROWSER_URL` | FileBrowser instance URL | Yes |
-| `FILEBROWSER_USERNAME` | Login username | Yes* |
-| `FILEBROWSER_PASSWORD` | Login password | Yes* |
+./testsuite/run-tests.bash          # summary only
+./testsuite/run-tests.bash -d       # detailed output
+./testsuite/run-tests.bash -l       # list test files (offline)
+```
 
-*Will prompt interactively if not provided
+See [testsuite/README.md](testsuite/README.md) for container setup, environment variables, the full coverage list, and framework helpers.
 
-### Exit Codes
+The GitHub Actions workflow starts `ghcr.io/gtsteffaniak/filebrowser:stable`, sets `FILEBROWSER_ADMIN_PASSWORD`, waits for `/health`, builds `fbcli`, and runs the complete suite on Linux amd64 and arm64. The Windows job builds the binary and runs the unit tests and offline smoke checks.
 
-| Code | Description |
-|------|-------------|
-| 0 | Success |
-| 1 | General error (network, authentication, file operations) |
+## Development
 
-## 🤝 Contributing
+```bash
+gofmt -w .
+go vet ./...
+go test ./...
+golangci-lint run
+go build -o fbcli .
+```
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Run tests (`./testsuite/run-tests.bash`)
-4. Commit your changes (`git commit -m 'Add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
+Cross-compile for release:
 
-## 📄 License
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o fbcli-linux-amd64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o fbcli-linux-arm64 .
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -o fbcli-windows-amd64.exe .
+```
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Release tags (`v*`) run verification, build Linux amd64/arm64 and Windows amd64 archives, generate checksums, and publish a GitHub release.
 
-## 🚧 Roadmap
+## License
 
-- [ ] Configuration file support
-- [ ] Progress bars for large transfers
-- [ ] Resume interrupted downloads
-- [ ] Parallel upload/download
-- [ ] Watch mode for continuous sync
-- [ ] Plugin system for custom operations
-
-## 🐛 Issues & Support
-
-- Report bugs: [GitHub Issues](https://github.com/johnwmail/fbcli/issues)
-- Feature requests: [GitHub Discussions](https://github.com/johnwmail/fbcli/discussions)
-- Documentation: [Wiki](https://github.com/johnwmail/fbcli/wiki)
-
-## 🙏 Acknowledgments
-
-- [FileBrowser](https://filebrowser.org) for the excellent web-based file management interface
-- The Go community for amazing tools and libraries
-- Contributors who help improve this project
-
----
-
-**Made with ❤️ for the FileBrowser community**
+MIT — see [LICENSE](LICENSE).

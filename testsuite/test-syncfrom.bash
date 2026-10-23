@@ -32,6 +32,27 @@ assert_exists "Remote file1 synced locally" "$LOCAL_SYNC_DIR/remote1.txt"
 assert_exists "Remote file2 synced locally" "$LOCAL_SYNC_DIR/remote2.txt"
 assert_exists "Nested remote file synced locally" "$LOCAL_SYNC_DIR/subdir/nested-remote.txt"
 assert_exists "JSON remote file synced locally" "$LOCAL_SYNC_DIR/data-remote.json"
+assert_content "Remote file1 content synced" "$LOCAL_SYNC_DIR/remote1.txt" "content of remote file 1"
+assert_content "Nested remote content synced" "$LOCAL_SYNC_DIR/subdir/nested-remote.txt" "nested remote content"
+assert_content "JSON remote content synced" "$LOCAL_SYNC_DIR/data-remote.json" "remote json data"
+
+step "Testing repeat sync detects unchanged files"
+assert_contains "Repeat sync reports in-sync files" "already in sync" ./fbcli syncfrom "$REMOTE_DIR/$LOCAL_SETUP_DIR" "$LOCAL_SYNC_DIR"
+
+step "Testing syncfrom a single file into an existing directory"
+EXISTING_SYNC_DIR="synced-existing-$TEST_ID"
+mkdir -p "$EXISTING_SYNC_DIR"
+track_local "$EXISTING_SYNC_DIR"
+assert "Sync one remote file into an existing directory" \
+    ./fbcli syncfrom "$REMOTE_DIR/$LOCAL_SETUP_DIR/remote1.txt" "$EXISTING_SYNC_DIR"
+assert_exists "Single remote file synced into directory" "$EXISTING_SYNC_DIR/remote1.txt"
+assert_content "Single-file sync content matches" "$EXISTING_SYNC_DIR/remote1.txt" "content of remote file 1"
+
+step "Testing local-only entries are deleted"
+create_test_file "$LOCAL_SYNC_DIR/local-only-$TEST_ID.txt" "local only"
+assert_exists "Local-only file exists before sync" "$LOCAL_SYNC_DIR/local-only-$TEST_ID.txt"
+assert "Sync removes local-only entries" ./fbcli syncfrom "$REMOTE_DIR/$LOCAL_SETUP_DIR" "$LOCAL_SYNC_DIR"
+assert_not_exists "Local-only file deleted by sync" "$LOCAL_SYNC_DIR/local-only-$TEST_ID.txt"
 
 step "Testing syncfrom with remote file modifications"
 # Modify a remote file by uploading a new version
@@ -47,6 +68,8 @@ track_local "new-remote.txt"
 assert "Sync updated remote files" ./fbcli syncfrom "$REMOTE_DIR/$LOCAL_SETUP_DIR" "$LOCAL_SYNC_DIR"
 assert_exists "Updated remote file synced" "$LOCAL_SYNC_DIR/remote1.txt"
 assert_exists "New remote file synced" "$LOCAL_SYNC_DIR/new-remote.txt"
+assert_content "Updated remote content synced" "$LOCAL_SYNC_DIR/remote1.txt" "updated remote content 1"
+assert_content "New remote content synced" "$LOCAL_SYNC_DIR/new-remote.txt" "new remote file content"
 
 step "Testing syncfrom with ignore pattern"
 # Setup remote files with different types
@@ -69,6 +92,7 @@ assert_exists "Important remote file synced" "$LOCAL_IGNORE_DIR/important-remote
 assert_exists "Config remote file synced" "$LOCAL_IGNORE_DIR/config-remote.json"
 assert_not_exists "Debug log ignored" "$LOCAL_IGNORE_DIR/debug-remote.log"
 assert_not_exists "Error log ignored" "$LOCAL_IGNORE_DIR/error-remote.log"
+assert_content "Important remote content synced" "$LOCAL_IGNORE_DIR/important-remote.txt" "important remote data"
 
 step "Testing syncfrom with complex ignore patterns"
 LOCAL_SETUP_DIR3="setup-complex-syncfrom-$TEST_ID"
@@ -91,6 +115,7 @@ assert_exists "Text file synced from remote" "$LOCAL_COMPLEX_DIR/keep-remote.txt
 assert_exists "PDF file synced from remote" "$LOCAL_COMPLEX_DIR/document-remote.pdf"
 assert_not_exists "Temp file ignored" "$LOCAL_COMPLEX_DIR/temp-remote.tmp"
 assert_not_exists "Backup file ignored" "$LOCAL_COMPLEX_DIR/backup-remote.bak"
+assert_content "Complex sync content matches" "$LOCAL_COMPLEX_DIR/keep-remote.txt" "keep this remote file"
 
 step "Testing command aliases"
 # Test 'from' alias
@@ -105,6 +130,7 @@ LOCAL_ALIAS_DIR="from-alias-test-$TEST_ID"
 assert "from alias works" ./fbcli from "$REMOTE_DIR4" "$LOCAL_ALIAS_DIR"
 track_local "$LOCAL_ALIAS_DIR"
 assert_exists "File synced with from alias" "$LOCAL_ALIAS_DIR/from-alias-test.txt"
+assert_content "From alias content synced" "$LOCAL_ALIAS_DIR/from-alias-test.txt" "testing from alias"
 
 # Test 'from' alias with ignore
 LOCAL_SETUP_DIR5="alias-ignore-setup-$TEST_ID"
@@ -122,6 +148,7 @@ assert "from alias with ignore works" ./fbcli from -i ".*\\.log$" "$REMOTE_DIR5/
 track_local "$LOCAL_ALIAS_IGNORE_DIR"
 assert_exists "Include file synced with from alias" "$LOCAL_ALIAS_IGNORE_DIR/include-remote.txt"
 assert_not_exists "Log file ignored with from alias" "$LOCAL_ALIAS_IGNORE_DIR/ignore-remote.log"
+assert_content "From alias ignore content synced" "$LOCAL_ALIAS_IGNORE_DIR/include-remote.txt" "include this remote"
 
 step "Testing error handling"
 assert_fails "Sync fails with non-existent remote path" ./fbcli syncfrom "/non-existent-remote-$TEST_ID" "local-dir"

@@ -99,6 +99,7 @@ track_remote "$REMOTE_DIR4"
 assert "rm -i works" ./fbcli rm -i "ignore-me.txt" "$REMOTE_DIR4/$LOCAL_SETUP_DIR4"
 assert_remote_not_exists "Non-ignored files deleted" "$REMOTE_DIR4/$LOCAL_SETUP_DIR4/delete-me.txt"
 assert_remote_exists "Ignored file preserved" "$REMOTE_DIR4/$LOCAL_SETUP_DIR4/ignore-me.txt"
+assert_remote_content "Ignored file content preserved" "$REMOTE_DIR4/$LOCAL_SETUP_DIR4/ignore-me.txt" "do not delete"
 
 # Test 7: delete with ignore option
 step "Testing delete with ignore option"
@@ -114,10 +115,24 @@ track_remote "$REMOTE_DIR5"
 assert "delete -i works" ./fbcli delete -i ".*\\.log$" "$REMOTE_DIR5/$LOCAL_SETUP_DIR5"
 assert_remote_not_exists "Non-ignored file deleted with delete -i" "$REMOTE_DIR5/$LOCAL_SETUP_DIR5/delete-this.txt"
 assert_remote_exists "Log file ignored with delete -i" "$REMOTE_DIR5/$LOCAL_SETUP_DIR5/ignore-pattern.log"
+assert_remote_content "Ignored log content preserved" "$REMOTE_DIR5/$LOCAL_SETUP_DIR5/ignore-pattern.log" "ignore this log"
 
-# Test 8: Error handling
+# Test 8: rm -i removes the directory when nothing is ignored
+step "Testing rm -i with no matching ignore pattern"
+LOCAL_SETUP_DIR6="setup-rm-empty-$TEST_ID"
+REMOTE_DIR6="/test-rm-empty-$TEST_ID"
+create_test_dir "$LOCAL_SETUP_DIR6" 2
+create_test_file "$LOCAL_SETUP_DIR6/only.txt" "only file"
+assert "Upload rm-empty test files" ./fbcli upload "$LOCAL_SETUP_DIR6" "$REMOTE_DIR6"
+track_remote "$REMOTE_DIR6"
+assert "rm -i removes all contents and the directory" ./fbcli rm -i "does-not-match" "$REMOTE_DIR6/$LOCAL_SETUP_DIR6"
+assert_remote_not_exists "rm -i removed the directory" "$REMOTE_DIR6/$LOCAL_SETUP_DIR6"
+
+# Test 9: Error handling
 step "Testing error handling"
 assert_fails "rm fails on non-existent file" ./fbcli rm "/non-existent-file-$TEST_ID.txt"
 assert_fails "delete fails on non-existent file" ./fbcli delete "/non-existent-file-$TEST_ID.txt"
+assert_fails "rm refuses to delete the source root" ./fbcli rm /
+assert_fails "rm -i refuses to delete the source root" ./fbcli rm -i "never-match" /
 
 finish_test

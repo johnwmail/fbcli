@@ -8,10 +8,52 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Build Binaries
+  verify:
+    name: Verify Release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download Go modules
+        run: go mod download -x
+      - name: Check formatting
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [[ -n "$UNFORMATTED" ]]; then
+            echo "The following files are not properly formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+      - name: Run go vet
+        run: go vet ./...
+      - name: Run unit tests
+        run: go test ./...
+      - name: Validate test scripts
+        run: |
+          for file in testsuite/*.bash; do
+            bash -n "$file"
+          done
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 20
     strategy:
       matrix:
         goos: [linux, windows]
@@ -21,15 +63,15 @@ jobs:
             goarch: arm64
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '>=1.24'
+          go-version-file: go.mod
           cache: true
       - name: Download Go modules
         run: go mod download -x
-      - name: Build
+      - name: Build and package
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
@@ -40,58 +82,91 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BINARY_NAME="fbcli.exe"
           fi
-          go build -v -ldflags="$VERSION_VAR" -o "${BINARY_NAME}"
+          go build -trimpath -v -ldflags="-s -w $VERSION_VAR" -o "${BINARY_NAME}"
+
           ASSET_NAME="fbcli-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "${ASSET_NAME}.zip" "${BINARY_NAME}"
+            zip "${ASSET_NAME}.zip" "${BINARY_NAME}" LICENSE README.md
+            sha256sum "${ASSET_NAME}.zip" > "${ASSET_NAME}.zip.sha256"
           else
-            tar -czvf "${ASSET_NAME}.tar.gz" "${BINARY_NAME}"
+            tar -czvf "${ASSET_NAME}.tar.gz" "${BINARY_NAME}" LICENSE README.md
+            sha256sum "${ASSET_NAME}.tar.gz" > "${ASSET_NAME}.tar.gz.sha256"
           fi
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fbcli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: fbcli-${{ matrix.goos }}-${{ matrix.goarch }}.*
-          retention-days: 1
+          if-no-files-found: error
+          retention-days: 7
 
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 10
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - name: Create Release with Assets
-        uses: softprops/action-gh-release@v2
+      - name: Create release with assets
+        uses: softprops/action-gh-release@v3
         with:
           name: Release ${{ github.ref_name }}
           body: |
             ## fbcli ${{ github.ref_name }}
-            
-            Cross-platform binaries for fbcli (File Browser CLI).
-            
-            ### Downloads:
+
+            Command-line client for **FileBrowser Quantum v2** (tested with v2.0.1-stable).
+
+            ### Downloads
+
             - **Linux amd64**: `fbcli-linux-amd64.tar.gz`
-            - **Linux arm64**: `fbcli-linux-arm64.tar.gz` 
+            - **Linux arm64**: `fbcli-linux-arm64.tar.gz`
             - **Windows amd64**: `fbcli-windows-amd64.zip`
-            
-            ### Installation:
+
+            SHA-256 checksums are published next to each archive.
+
+            ### Installation
+
             ```bash
-            # Linux/macOS
+            # Linux
             tar -xzf fbcli-linux-amd64.tar.gz
             chmod +x fbcli
-            
-            # Windows
-            # Extract fbcli.exe from zip file
+            ./fbcli --version
+            # Optional checksum verification
+            sha256sum -c fbcli-linux-amd64.tar.gz.sha256
             ```
+
+            macOS users can build from source with `go build -o fbcli .`.
+
+            ```powershell
+            # Windows
+            Expand-Archive fbcli-windows-amd64.zip
+            .\fbcli.exe --version
+            ```
+
+            ### Required server
+
+            FileBrowser Quantum v2.0.1-stable or newer. Legacy FileBrowser v1 is not supported.
+
+            ```bash
+            export FILEBROWSER_URL="https://files.example.com"
+            export FILEBROWSER_USERNAME="alice"
+            export FILEBROWSER_PASSWORD="your-password"
+            # Optional when the account has multiple sources:
+            export FILEBROWSER_SOURCE="media"
+            ```
+
+            See the project README for source permissions, sync semantics, and migration notes.
           files: |
             ./artifacts/fbcli-linux-amd64/fbcli-linux-amd64.tar.gz
+            ./artifacts/fbcli-linux-amd64/fbcli-linux-amd64.tar.gz.sha256
             ./artifacts/fbcli-linux-arm64/fbcli-linux-arm64.tar.gz
+            ./artifacts/fbcli-linux-arm64/fbcli-linux-arm64.tar.gz.sha256
             ./artifacts/fbcli-windows-amd64/fbcli-windows-amd64.zip
+            ./artifacts/fbcli-windows-amd64/fbcli-windows-amd64.zip.sha256
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
           generate_release_notes: true

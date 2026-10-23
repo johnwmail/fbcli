@@ -58,5 +58,14 @@ assert "mkdir on existing directory succeeds" ./fbcli mkdir "$REMOTE_DIR1"
 # Test 7: Error handling - invalid path
 step "Testing invalid path"
 assert_fails "mkdir fails with empty path" ./fbcli mkdir ""
+assert_fails "mkdir refuses the source root" ./fbcli mkdir "/"
+assert_fails "mkdir fails with an invalid source" ./fbcli mkdir "/test-invalid-source-$TEST_ID" --source "missing-source-$TEST_ID"
+
+step "Testing mkdir does not replace an existing file"
+CONFLICT_FILE="mkdir-conflict-$TEST_ID.txt"
+create_test_file "$CONFLICT_FILE" "keep this file"
+assert "Upload a file for the mkdir conflict test" ./fbcli upload "$CONFLICT_FILE" "$REMOTE_DIR1"
+assert_fails "mkdir fails when a file already exists at the path" ./fbcli mkdir "$REMOTE_DIR1/$CONFLICT_FILE"
+assert_remote_content "Existing file was not replaced" "$REMOTE_DIR1/$CONFLICT_FILE" "keep this file"
 
 finish_test
